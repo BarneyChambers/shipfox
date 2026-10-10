@@ -31,8 +31,6 @@ export interface StartLocalRunnerParams {
   pollMaxDurationMs?: number | undefined;
   /** Extra environment variables for one runner process. */
   extraEnv?: Record<string, string> | undefined;
-  /** Overrides the resolved `@shipfox/runner` source entry (run via tsx). */
-  entryPath?: string | undefined;
   /**
    * A runner installation from `deployRunner`. The runner then runs its built entry
    * with plain Node, as the runner image does, instead of the source entry via tsx.
@@ -46,7 +44,7 @@ export interface LocalRunnerHandle {
   logFile: string;
   workspaceId: string;
   labels: readonly string[];
-  credentialHelperBinDir?: string | undefined;
+  credentialHelperBinDir: string;
 }
 
 export interface StopLocalRunnerOptions {
@@ -84,9 +82,6 @@ function runnerModuleFor(params: StartLocalRunnerParams): RunnerModule {
       nodeArgs: [],
     };
   }
-  if (params.entryPath !== undefined) {
-    return {cwd: dirname(params.entryPath), entry: params.entryPath, nodeArgs: SOURCE_NODE_ARGS};
-  }
   return resolveRunnerModule();
 }
 
@@ -101,10 +96,9 @@ function inheritedProcessEnv(): Record<string, string> {
 
 function buildRunnerEnv(
   params: StartLocalRunnerParams,
-  credentialHelperBinDir: string | undefined,
+  credentialHelperBinDir: string,
 ): Record<string, string> {
   const inherited = inheritedProcessEnv();
-  const renewableGitEnabled = params.extraEnv?.SHIPFOX_RUNNER_ENABLE_RENEWABLE_GIT === 'true';
   return {
     ...inherited,
     SHIPFOX_API_URL: params.apiUrl ?? config.API_URL,
@@ -116,12 +110,8 @@ function buildRunnerEnv(
     ...(params.workspaceRoot !== undefined
       ? {SHIPFOX_RUNNER_WORKSPACE_ROOT: params.workspaceRoot}
       : {}),
-    ...(credentialHelperBinDir
-      ? {
-          PATH: [credentialHelperBinDir, inherited.PATH].filter(Boolean).join(delimiter),
-        }
-      : {}),
-    ...(renewableGitEnabled ? {GIT_CONFIG_NOSYSTEM: '1'} : {}),
+    PATH: [credentialHelperBinDir, inherited.PATH].filter(Boolean).join(delimiter),
+    GIT_CONFIG_NOSYSTEM: '1',
     ...(params.extraEnv ?? {}),
   };
 }
@@ -129,13 +119,11 @@ function buildRunnerEnv(
 function createCredentialHelperBin(
   runnerModule: RunnerModule,
   params: StartLocalRunnerParams,
-): string | undefined {
-  if (params.extraEnv?.SHIPFOX_RUNNER_ENABLE_RENEWABLE_GIT !== 'true') return undefined;
-
+): string {
   const helperTarget = join(runnerModule.cwd, 'dist', 'git-credential-helper.js');
   if (!existsSync(helperTarget)) {
     throw new Error(
-      `The local runner credential helper is missing at ${helperTarget}; build @shipfox/runner before starting a renewable Git E2E runner.`,
+      `The local runner credential helper is missing at ${helperTarget}; build @shipfox/runner before starting an E2E runner.`,
     );
   }
 
@@ -149,8 +137,7 @@ function createCredentialHelperBin(
   }
 }
 
-function removeCredentialHelperBin(helperBinDir: string | undefined): void {
-  if (helperBinDir === undefined) return;
+function removeCredentialHelperBin(helperBinDir: string): void {
   rmSync(helperBinDir, {force: true, recursive: true});
 }
 
@@ -201,7 +188,7 @@ export function startLocalRunner(params: StartLocalRunnerParams): LocalRunnerHan
     logFile: params.logFile,
     workspaceId: params.workspaceId,
     labels: params.labels,
-    ...(credentialHelperBinDir ? {credentialHelperBinDir} : {}),
+    credentialHelperBinDir,
   };
 }
 
