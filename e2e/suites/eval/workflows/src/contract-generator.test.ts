@@ -10,6 +10,7 @@ import {type ContractFiles, loadContracts} from './contracts.js';
 const fixtureRoot = fileURLToPath(new URL('../test/fixtures/contracts/', import.meta.url));
 const effectPattern = /a step `effect` is only for cases of kind `round-trip`/u;
 const effectKeyPattern = /the effect key "a_effect" is used by another step/u;
+const waitKeyPattern = /the wait key "a_wait" is used by another step/u;
 const withOnlyPattern = /is only for `with`, not `expect`/u;
 const targetPattern =
   /\$target\.linear\.missing_issue\.identifier is only for cases of kind `error`/u;
@@ -353,6 +354,34 @@ describe('generateContractFiles', () => {
 
       await expect(async () => generateContractFiles(await generate())).rejects.toThrow(
         effectPattern,
+      );
+    });
+
+    it('waits before an effect that names a wait', async () => {
+      await writeCase(
+        'linear/waited.yaml',
+        roundTrip(
+          '  - key: a\n    tool: save_issue\n    effect:\n      tool: get_issue\n      with: {id: $steps.a.id}\n      wait_seconds: 15\n      expect:\n        values: {status: Done}\n',
+        ),
+      );
+
+      const files = generateContractFiles(await generate());
+
+      const content = files.find(({name}) => name === 'contracts-linear.yaml')?.content ?? '';
+      const waited = content.slice(content.indexOf('  waited:'));
+      expect(waited).toContain('- key: a_wait\n        run: sleep 15\n      - key: a_effect\n');
+    });
+
+    it('rejects a wait key that another step uses', async () => {
+      await writeCase(
+        'linear/clash.yaml',
+        roundTrip(
+          '  - key: a\n    tool: save_issue\n    effect:\n      tool: get_issue\n      with: {id: $steps.a.id}\n      wait_seconds: 15\n      expect:\n        values: {status: Done}\n  - {key: a_wait, tool: get_issue}\n',
+        ),
+      );
+
+      await expect(async () => generateContractFiles(await generate())).rejects.toThrow(
+        waitKeyPattern,
       );
     });
 

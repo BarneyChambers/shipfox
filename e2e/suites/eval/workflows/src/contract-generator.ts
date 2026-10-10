@@ -45,8 +45,10 @@ type Segment = {field: string} | {index: number};
 
 interface WorkflowStep {
   key: string;
-  tool: string;
-  connection: string;
+  // A step calls a tool, or runs the command that waits before an effect.
+  run?: string;
+  tool?: string;
+  connection?: string;
   with?: unknown;
   outputs?: Record<string, string>;
   gate?: {success: string};
@@ -234,6 +236,16 @@ function caseJob({
     const effectKey = `${key}_effect`;
     if (keys.includes(effectKey)) {
       throw new Error(`${origin}: the effect key "${effectKey}" is used by another step`);
+    }
+    const {wait_seconds: waitSeconds} = step.effect;
+    if (waitSeconds !== undefined) {
+      // The provider applies the write later. The runtime never restarts a tool step, so the
+      // effect can't poll: the job waits once, then reads.
+      const waitKey = `${key}_wait`;
+      if (keys.includes(waitKey)) {
+        throw new Error(`${origin}: the wait key "${waitKey}" is used by another step`);
+      }
+      steps.push({key: waitKey, run: `sleep ${waitSeconds}`});
     }
     steps.push(
       compileStep({
