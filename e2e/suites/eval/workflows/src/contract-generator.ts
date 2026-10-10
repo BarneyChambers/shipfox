@@ -253,7 +253,7 @@ function caseJob({
 /** The `$steps` references of a case, by the key of the step they read and the output they name. */
 interface StepReferences {
   keys: ReadonlySet<string>;
-  requests: Map<string, Map<string, Segment[]>>;
+  requests: Map<string, Map<string, {segments: Segment[]; text: boolean}>>;
 }
 
 /** Gives each step the outputs that later steps read through `$steps`. */
@@ -270,10 +270,13 @@ function withReferencedOutputs({
     const requested = references.requests.get(step.key);
     if (requested === undefined) return step;
     const outputs = {...step.outputs};
-    for (const [name, segments] of requested) {
+    for (const [name, {segments, text}] of requested) {
       if (outputs[name] !== undefined)
         throw new Error(`${origin}: two outputs are named "${name}"`);
-      outputs[name] = interpolation(`${presence({segments})} ? ${accessorOf(segments)} : ""`);
+      const accessor = accessorOf(segments);
+      outputs[name] = interpolation(
+        `${presence({segments})} ? ${text ? `string(${accessor})` : accessor} : ""`,
+      );
     }
     return {...step, outputs};
   });
@@ -453,14 +456,16 @@ function generationResolver({
     steps:
       references === undefined
         ? withOnly('$steps')
-        : ({key, path}) => {
+        : ({key, path, text = false}) => {
             if (!references.keys.has(key)) {
               throw new Error(`${origin}: $steps.${key} names a step key the case doesn't have`);
             }
             const segments = parsePath({path, origin});
-            const name = `ref_${segmentName(segments)}`;
-            const requested = references.requests.get(key) ?? new Map<string, Segment[]>();
-            requested.set(name, segments);
+            const name = `${text ? 'text' : 'ref'}_${segmentName(segments)}`;
+            const requested =
+              references.requests.get(key) ??
+              new Map<string, {segments: Segment[]; text: boolean}>();
+            requested.set(name, {segments, text});
             references.requests.set(key, requested);
             return interpolation(`steps.${key}.outputs.${name}`);
           },
@@ -582,6 +587,10 @@ function typeCheck({accessor, type}: {accessor: string; type: ShapeLeaf['type']}
 // A dyn mapping is declared as a json output, and the declaration parses string values, so an id
 // like "901222980414" would come back as a number. A string-typed mapping skips the parse. A
 // result of another type maps to "" and fails the check.
+//
+// An absent field maps to a value of the expected value's type that differs from it. A tool with a
+// typed output schema rejects a ternary whose branches have different types, and the check still
+// fails on the absent field.
 function stringValueMapping({
   segments,
   value,
@@ -589,9 +598,17 @@ function stringValueMapping({
   segments: Segment[];
   value: ContractScalar;
 }): string {
-  if (!changedByJsonParse(value)) return `${presence({segments})} ? ${accessorOf(segments)} : ""`;
+  if (!changedByJsonParse(value)) {
+    return `${presence({segments})} ? ${accessorOf(segments)} : ${absentValue(value)}`;
+  }
   const check = (accessor: string) => typeCheck({accessor, type: 'string'});
   return `${presence({segments, check})} ? string(${accessorOf(segments)}) : ""`;
+}
+
+function absentValue(value: ContractScalar): string {
+  if (typeof value === 'boolean') return String(!value);
+  if (typeof value === 'number') return String(value + 1);
+  return '""';
 }
 
 function changedByJsonParse(value: ContractScalar): boolean {
