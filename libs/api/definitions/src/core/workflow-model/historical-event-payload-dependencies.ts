@@ -1,3 +1,4 @@
+import {gateFailureRules} from '@shipfox/api-definitions-dto';
 import {
   analyzeHistoricalEventPayloadAccess,
   type HistoricalEventPayloadAccess,
@@ -9,6 +10,7 @@ import type {
   WorkflowModel,
   WorkflowModelJob,
   WorkflowModelStep,
+  WorkflowModelStepFailureAction,
 } from '../entities/workflow-model.js';
 import type {
   WorkflowModelValidationIssue,
@@ -200,6 +202,15 @@ export function historicalEventPayloadDependencyIssues(
   });
 }
 
+function scanFailureRule(
+  rule: WorkflowModelStepFailureAction,
+  path: readonly (string | number)[],
+  dependencies: HistoricalEventPayloadDependency[],
+): void {
+  scanExpression(rule.if, [...path, 'if'], dependencies);
+  scanTemplate(rule.feedbackTemplate, [...path, 'feedback'], dependencies);
+}
+
 function scanWorkflowStep(
   step: WorkflowModelStep,
   path: readonly (string | number)[],
@@ -211,11 +222,14 @@ function scanWorkflowStep(
   if (step.gate?.success !== undefined) {
     scanExpression(step.gate.success, [...path, 'gate', 'success'], dependencies);
   }
-  scanTemplate(
-    step.gate?.onFailure?.feedbackTemplate,
-    [...path, 'gate', 'on_failure', 'feedback'],
-    dependencies,
-  );
+  const onFailure = step.gate?.onFailure;
+  const isList = Array.isArray(onFailure);
+  gateFailureRules(onFailure).forEach((rule, index) => {
+    const rulePath = isList
+      ? [...path, 'gate', 'on_failure', index]
+      : [...path, 'gate', 'on_failure'];
+    scanFailureRule(rule, rulePath, dependencies);
+  });
 
   if (step.kind === 'agent' && step.session !== undefined) {
     scanTemplate(step.session.key, [...path, 'session'], dependencies);

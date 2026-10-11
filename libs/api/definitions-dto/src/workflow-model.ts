@@ -318,9 +318,19 @@ export type WorkflowStepSourceLocationMap = ReadonlyMap<
 >;
 export interface WorkflowModelStepGate {
   readonly success?: WorkflowExpression;
-  readonly onFailure?: WorkflowModelStepFailureAction;
+  /** One rule, or an ordered list where the first rule that applies drives a restart. Tool steps never restart. */
+  readonly onFailure?: WorkflowModelStepFailureAction | readonly WorkflowModelStepFailureAction[];
+}
+/** Reads `onFailure` as a rule list; one rule is a one-rule list. */
+export function gateFailureRules(
+  onFailure: WorkflowModelStepGate['onFailure'],
+): readonly WorkflowModelStepFailureAction[] {
+  if (onFailure === undefined) return [];
+  return 'restartFrom' in onFailure ? [onFailure] : onFailure;
 }
 export interface WorkflowModelStepFailureAction {
+  /** Selects the rule when it returns true. A rule with no condition always applies. */
+  readonly if?: WorkflowExpression;
   readonly restartFrom: string;
   readonly feedback?: string;
   readonly feedbackTemplate?: WorkflowFieldTemplate;
