@@ -63,6 +63,60 @@ Because the two parts are separate, a failed check has two possible results:
 - **Go back to the step that can fix the problem.** Add `on_failure` and name
   that step. The job does not start again from its first step.
 
+## Restart or fail
+
+Some failures are worth another try. Some are not. An earlier step can fix a
+merge conflict, so the job should restart. No step can fix a missing
+credential, so the job should fail.
+
+To choose, give `on_failure` a list of rules. Each rule has an `if` condition.
+Shipfox checks the rules in order and uses the first rule where `if` is true.
+
+```yaml
+steps:
+  - key: select_branch
+    run: ./scripts/select-branch.sh
+
+  - key: prepare
+    run: ./scripts/prepare.sh
+
+  - key: publish
+    run: ./scripts/publish.sh
+    outputs:
+      failure_kind:
+        type: string
+        from_file: failure-kind.txt
+    gate:
+      on_failure:
+        - if: has(step.outputs.failure_kind) && step.outputs.failure_kind == "foreign-commits"
+          restart_from: select_branch
+
+        - if: has(step.outputs.failure_kind) && step.outputs.failure_kind in ["stale-head", "transient"]
+          restart_from: prepare
+          max_attempts: 2
+```
+
+The `publish` script writes the kind of failure to `failure-kind.txt`. When
+`publish` fails:
+
+- For `foreign-commits`, the job goes back to `select_branch`.
+- For `stale-head` or `transient`, the job goes back to `prepare`.
+- For any other kind, no rule applies. The job fails, and `publish` keeps its
+  own error.
+
+When no rule applies, the job fails. A failure that you did not plan for does
+not restart by accident.
+
+Keep these points in mind:
+
+- `if` can read `step.exit_code`, `step.status`, and `step.outputs`.
+- A step can fail before it sets an output. Use `has()` before you read an
+  output. If Shipfox cannot read the value, the job fails.
+- A rule with no `if` always applies. Put it last.
+- A gate with `success` set to `true` passes the step, and Shipfox reads no rule.
+  To choose only with rules, leave `success` out. The status of the step then
+  decides if the step passed.
+
 ## Use a separate check
 
 Do not ask the agent that did the work to also check the work. An agent that
@@ -163,6 +217,14 @@ The file is plain text, and secrets are masked. A long log keeps only its end.
 The [Contexts reference](/reference/contexts#context-properties) and
 [Limits](/reference/limits#logs) list the exact rules.
 
+`feedback` can contain `${{ }}` expressions. They read `step.exit_code`,
+`step.status`, and `step.outputs`. For example, this message gives the exit code
+to the restarted step:
+
+```yaml
+feedback: The tests failed with exit code ${{ step.exit_code }}.
+```
+
 ## Loop bounds
 
 Two limits stop a loop that does not pass its check:
@@ -198,6 +260,35 @@ jobs:
 - `execution_timeout` is the time that the job can run. The time includes every
   attempt. Here, if the job is not complete after 30 minutes, it fails with
   `timed_out`.
+
+With a list of rules, each rule has its own `max_attempts`. The number counts
+every run of the step. It does not count only the runs that this rule started.
+
+```yaml
+steps:
+  - key: fix
+    prompt: Fix the problem.
+
+  - key: test
+    run: ./scripts/test.sh
+    gate:
+      on_failure:
+        - if: step.exit_code == 2
+          restart_from: fix
+
+        - if: step.exit_code == 3
+          restart_from: fix
+          max_attempts: 2
+```
+
+This is what happens:
+
+1. `test` exits with code 2. The first rule applies, and the job restarts from
+   `fix`.
+2. `test` runs a second time and exits with code 3.
+3. The second rule applies. It has `max_attempts: 2`, and `test` has already run
+   2 times.
+4. The job does not restart. It fails with `restart_exhausted`.
 
 The limit that the job reaches first stops the loop.
 
