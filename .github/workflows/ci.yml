@@ -1293,7 +1293,16 @@ jobs:
   # Cloud staging-edge installs these packed packages by URL. Nothing here publishes to npm.
   publish-package-candidate:
     name: Publish package candidate
-    needs: [release-mode, static-verification, external-package-contracts, publication-preflight, tests, e2e]
+    needs:
+      [
+        release-mode,
+        static-verification,
+        external-package-contracts,
+        publication-preflight,
+        tests,
+        e2e,
+        publish-application-release,
+      ]
     if: >-
       always() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.release-mode.result == 'success' &&
@@ -1302,12 +1311,15 @@ jobs:
       needs.external-package-contracts.result == 'success' &&
       needs.publication-preflight.result == 'success' &&
       needs.tests.result == 'success' &&
-      needs.e2e.result == 'success'
+      needs.e2e.result == 'success' &&
+      needs.publish-application-release.result == 'success'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     permissions:
       contents: read
+      packages: read
     env:
+      APPLICATION_RELEASE_REPOSITORY: ghcr.io/shipfoxhq/application-releases
       CANDIDATE_PUBLIC_URL: https://candidates.shipfox.io
 
     steps:
@@ -1328,6 +1340,17 @@ jobs:
           # The publication closure also contains the published E2E packages.
           filter: "./{e2e/core,e2e/drivers/runner-process,e2e/setup/auth,e2e/setup/workspaces,e2e/setup/projects,e2e/setup/integrations,e2e/setup/agent,e2e/observe/workflows,libs,tools}/**"
 
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2
+        with:
+          version: 1.3.3
+
+      - name: Log in to GHCR
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" \
+            | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+
       - name: Build publication closure
         run: turbo type build type:emit --filter=@shipfox/e2e-driver-runner-process... --filter=@shipfox/e2e-setup-auth... --filter=@shipfox/e2e-setup-workspaces... --filter=@shipfox/e2e-setup-projects... --filter=@shipfox/e2e-setup-integrations... --filter=@shipfox/e2e-setup-agent... --filter=@shipfox/e2e-observe-workflows... --filter='./libs/**' --filter='./tools/**'
 
@@ -1338,6 +1361,17 @@ jobs:
             --output "$RUNNER_TEMP/package-candidate" \
             --public-url "$CANDIDATE_PUBLIC_URL" \
             --ci-run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Add application image references
+        run: |
+          set -euo pipefail
+          release_directory="$RUNNER_TEMP/application-release"
+          mkdir -p "$release_directory"
+          oras pull "$APPLICATION_RELEASE_REPOSITORY:$GITHUB_SHA" --output "$release_directory"
+          release_manifest="$release_directory/application-release.json"
+          test -f "$release_manifest"
+          jq '{runner: {repository: .images.runner.repository, digest: .images.runner.digest}, provisioner: {repository: .images.provisioner.repository, digest: .images.provisioner.digest}}' \
+            "$release_manifest" > "$RUNNER_TEMP/package-candidate/images.json"
 
       - name: Check packing restored the working tree
         run: |
