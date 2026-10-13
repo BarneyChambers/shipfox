@@ -161,6 +161,29 @@ describe('StepInspectorSheet', () => {
     expect(screen.getByText(reason)).toBeInTheDocument();
   });
 
+  it.each([
+    {
+      reason: 'default_gate_rejected',
+      title: 'Shipfox skipped this step',
+      description:
+        'An earlier step in this job failed, so Shipfox skipped this step. To run it after a failure, set `run_after: always` or `run_after: failure` on the step.',
+    },
+    {
+      reason: 'condition_rejected',
+      title: 'The if condition skipped this step',
+      description: 'The if condition of this step is false.',
+    },
+  ] as const)('words the $reason skip for a step', async ({reason, title, description}) => {
+    const user = userEvent.setup();
+    configureApiClient({fetchImpl: vi.fn(() => new Promise<Response>(() => undefined))});
+
+    await renderPanel({entry: stepEntry(reason as StepErrorReason)});
+    await user.click(screen.getByRole('button', {name: INSPECTOR_TRIGGER_NAME}));
+
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.getByText(description)).toBeInTheDocument();
+  });
+
   it('does not replace a specific step failure with the job failure reason', async () => {
     const user = userEvent.setup();
     configureApiClient({fetchImpl: vi.fn(() => new Promise<Response>(() => undefined))});

@@ -143,6 +143,114 @@ recipe](/how-to/recipes/parallel-ci-agent-review) applies this shape to a GitHub
 push. The [job fields
 reference](/reference/workflow-schema#job-fields) defines the dependency syntax.
 
+## When a step or job runs
+
+A failure stops the work that comes after it. This is the default:
+
+- Shipfox skips a step when an earlier step in the same job failed.
+- Shipfox skips a job when a job in its `needs` did not succeed.
+
+The default protects writes. For example, a step that pushes a branch does not
+run when the tests before it failed.
+
+Set `run_after` on a step or a job to change the default.
+
+| `run_after` | A step runs when | A job runs when |
+| --- | --- | --- |
+| `success` (default) | No earlier step in the job failed. | Every job in `needs` succeeded. |
+| `failure` | An earlier step in the job failed. | At least one job in `needs` failed. |
+| `always` | Whatever earlier steps did. | Whatever the status of `needs`. |
+
+A job always waits until every job in its `needs` has finished. With
+`run_after: failure`, a job looks only at the jobs in its own `needs`. It does
+not look at the jobs that those jobs need.
+
+### How `if` works with `run_after`
+
+An `if` does not replace `run_after`. Shipfox checks the two fields in this
+order:
+
+1. Shipfox checks `run_after`. If it does not pass, Shipfox skips the step or
+   job.
+2. Shipfox checks the `if`. If it is false, Shipfox skips the step or job.
+
+A step or job runs only when both checks pass. A step with an `if` and no
+`run_after` uses the default, so Shipfox still skips it after an earlier
+failure.
+
+This workflow shows the default, `always`, and `failure`:
+
+```yaml title=".shipfox/workflows/fix-and-report.yml"
+# yaml-language-server: $schema=https://www.shipfox.io/docs/workflow.schema.json
+name: Fix and report
+runner: shipfox
+
+triggers:
+  manual:
+    source: manual
+    with:
+      push: "true"
+
+jobs:
+  fix:
+    checkout:
+      permissions:
+        contents: write
+    steps:
+      - key: test
+        run: npm ci && npm test
+      # Skipped when the test step failed, even though it has an if.
+      - key: push
+        if: ${{ inputs.push == "true" }}
+        run: git push origin HEAD
+      # Runs whether the earlier steps passed or failed.
+      - key: summary
+        run_after: always
+        run: echo "Tests finished."
+
+  report_failure:
+    needs: [fix]
+    run_after: failure
+    steps:
+      - run: echo "The fix job failed."
+```
+
+In this workflow:
+
+- `push` has an `if` and no `run_after`. Shipfox skips it when `test` fails.
+- `summary` runs when `test` passes and when `test` fails.
+- `report_failure` runs only when the `fix` job fails.
+
+### Which value to use
+
+- Use `failure` for work that is useful only after a failure, such as a failure
+  report.
+- Use `always` for work that must run in both cases, such as a summary or a
+  cleanup. Its `if` can read a status to do different work in each case.
+
+### Read outputs after a failure
+
+A skipped step sets no outputs. An output without a `default` then has no
+value. A step or job that runs after a failure can read such an output. Shipfox
+then cannot evaluate the condition, and it skips the step or job. Check the
+output with `has()` first:
+
+```yaml
+if: ${{ has(steps.test.outputs.report) }}
+```
+
+### Find out why Shipfox skipped a step or job
+
+The run page tells you when `run_after` skipped a step or a job. It also shows
+the check that did not pass.
+
+Workflows that Shipfox synced before `run_after` existed keep the old
+behavior: an `if` replaces the default. The new behavior starts the next time
+the workflow file changes.
+
+The [step fields](/reference/workflow-schema#step-fields) and [job
+fields](/reference/workflow-schema#job-fields) references define the field.
+
 ## How results move between jobs
 
 A job output passes a small value to later jobs. It fits a version, a decision,

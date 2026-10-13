@@ -155,6 +155,27 @@ describe('skippedJobDescription', () => {
     );
   });
 
+  test('says which run_after value runs a job after a needed job did not succeed', () => {
+    expect(skippedJobDescription('default_gate_rejected')).toBe(
+      'A job in the `needs` of this job did not succeed, so Shipfox skipped this job. To run it after a failure, set `run_after: always` or `run_after: failure` on the job.',
+    );
+  });
+
+  test('does not blame a needed job when run_after: failure skipped the job', () => {
+    const description = skippedJobDescription('default_gate_rejected', [
+      {
+        expression: 'needs.exists(n, n.status == "failed")',
+        roots: ['needs'],
+        fillTarget: 'job-activation',
+        evaluatedAt: 'job-activation',
+        field: 'job.default_gate',
+        value: 'false',
+      },
+    ]);
+
+    expect(description).toBe('No job in `needs` failed, so this job did not run.');
+  });
+
   test('explains when materialized output exceeds the configured size limit', () => {
     expect(skippedJobDescription('output_too_large')).toBe('The job output is too large.');
   });
