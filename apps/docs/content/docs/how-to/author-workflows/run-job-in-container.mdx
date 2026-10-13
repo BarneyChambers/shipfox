@@ -1,0 +1,125 @@
+---
+title: "Run a Job in a Container"
+sidebarTitle: "Run Jobs in Containers"
+description: "Run the commands and agents of a job inside your own Docker image."
+---
+
+**Use the `container` field to run a job inside a Docker image.** Use it when
+your tools are already in an image.
+
+## Before you begin
+
+- Complete onboarding in [Shipfox](https://app.shipfox.io).
+- For a private image, [create a
+  secret](/how-to/set-up-work/secrets-and-variables) for the registry password.
+
+## Add the container
+
+Add this file to the default branch of your project.
+
+```yaml
+# yaml-language-server: $schema=https://www.shipfox.io/docs/workflow.schema.json
+name: Run in a container
+runner: shipfox
+
+triggers:
+  manual:
+    source: manual
+
+jobs:
+  versions:
+    container: node:24-bookworm
+    steps:
+      - key: node
+        run: node --version
+      - key: system
+        run: cat /etc/os-release
+```
+
+The runner starts one container from the image. All run steps and agent steps
+of the job run in that container.
+
+To verify, start the workflow from the **Workflows** tab and open the run.
+**Set up job** says that the job container is running. The `node` step prints
+a version that starts with `v24`.
+
+For your own workflow, change the image and the steps.
+
+## Pull a private image
+
+In the example, replace the `container` line with these lines:
+
+```yaml
+    container:
+      image: ghcr.io/acme/toolbox:2026.10
+      credentials:
+        username: acme-bot
+        password: ${{ secrets.GHCR_TOKEN }}
+```
+
+- `image`: the full name of your image. An image on Docker Hub needs no
+  registry address.
+- `username`: your username for the registry.
+- `password`: the secret that holds your password or token.
+
+The `image` field cannot read a secret.
+
+## Choose an image that works
+
+The image must match the platform of the runner.
+
+| The job uses | The image needs |
+| --- | --- |
+| Run steps | `sh` and the basic core utilities. Alpine images work. |
+| Agent steps with the `pi` harness | The same as run steps. |
+| Agent steps with the `claude` harness | A glibc image, such as Debian or Ubuntu. |
+| Git commands that use the checkout credential, such as `git push` | `git` and a glibc image. |
+| Docker commands | The `docker` command. |
+
+These rules apply in a job container:
+
+- The `ENTRYPOINT` and `CMD` of the image do not run.
+- Steps run as the default user of the image.
+- A run step uses `bash` if the image has it. If not, it uses `sh`.
+- The `pi` harness has no `grep` tool and no `find` tool. The agent uses shell
+  commands to search.
+
+## Use Docker inside the job
+
+A step can use Docker when the image has the `docker` command. The
+`docker:cli` image has it.
+
+In the example, replace the `container` line and the steps with these lines:
+
+```yaml
+    container: docker:cli
+    steps:
+      - key: hello
+        run: docker run --rm hello-world
+```
+
+Shipfox does not remove the containers that your steps start. Use `--rm`, or
+remove them in a later step.
+
+## Pass Docker options
+
+The `options` field adds flags to the `docker create` command:
+
+```yaml
+    container:
+      image: ghcr.io/acme/toolbox:2026.10
+      options: --cpus 4 --memory 12g -v cargo-cache:/usr/local/cargo/registry
+```
+
+- Do not set `--network` or `--entrypoint`. Shipfox sets them.
+- Do not publish ports. The container uses the network of the runner.
+- The `options` field cannot read a secret.
+
+## Adapt it to your workflow
+
+| To... | Change this |
+| --- | --- |
+| Set a variable for every step of the job | Add `env` under `container`. See [Container fields](/reference/workflow-schema#job-container-fields). |
+| Run the job without Docker access | Set `docker_socket: false` under `container`. |
+| Let an agent use the tools of the image | Add an agent step to the job. See [Add an agent step](/how-to/author-workflows/add-agent-steps). |
+| Push commits from the job | Use a glibc image that has `git`. See [Push repository changes](/integrations/github/guides/push-repository-changes). |
