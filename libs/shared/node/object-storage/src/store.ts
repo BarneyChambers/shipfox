@@ -1,5 +1,8 @@
 import {Readable} from 'node:stream';
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -7,6 +10,7 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import {Upload} from '@aws-sdk/lib-storage';
 import {getSignedUrl} from '@aws-sdk/s3-request-presigner';
@@ -23,6 +27,48 @@ export interface CreateS3ObjectStoreOptions {
   readonly prefix: string;
   /** Maximum duration of one data-transfer request. Zero leaves it unbounded. */
   readonly transferRequestTimeoutMs?: number | undefined;
+  /**
+   * Endpoint written into presigned URLs when callers reach the store by another name than this
+   * process does. The host is part of the signature, so it must be chosen at signing time.
+   */
+  readonly publicEndpoint?: string | undefined;
+}
+
+export interface CreateMultipartUploadParams {
+  readonly key: string;
+  readonly contentType?: string | undefined;
+  readonly metadata?: Record<string, string> | undefined;
+}
+
+export interface PresignUploadPartParams {
+  readonly key: string;
+  readonly uploadId: string;
+  /** 1-based, at most 10000. */
+  readonly partNumber: number;
+  readonly expiresInSeconds: number;
+}
+
+export interface CompletedUploadPart {
+  readonly number: number;
+  readonly etag: string;
+}
+
+export interface CompleteMultipartUploadParams {
+  readonly key: string;
+  readonly uploadId: string;
+  readonly parts: readonly CompletedUploadPart[];
+}
+
+export type CompleteMultipartUploadResult =
+  | {readonly status: 'completed'}
+  /** The upload id is gone: aborted, expired, or already completed by an earlier call. */
+  | {readonly status: 'upload-not-found'}
+  /** The store refused the parts: a wrong ETag, a wrong order, or a part that is too small. */
+  | {readonly status: 'rejected'; readonly code: string};
+
+export interface AbortMultipartUploadParams {
+  readonly key: string;
+  readonly uploadId: string;
 }
 
 export interface PutObjectBytesParams {
@@ -72,16 +118,31 @@ export interface PresignedObjectGet {
   readonly expiresAt: Date;
 }
 
+const REJECTED_PARTS_CODES = new Set([
+  'InvalidPart',
+  'InvalidPartOrder',
+  'EntityTooSmall',
+  'MalformedXML',
+]);
+
 export class S3ObjectStore {
   readonly #bucket: string;
   readonly #prefix: string;
   readonly #clients: ObjectStorageS3Clients;
 
-  constructor({profile, prefix, transferRequestTimeoutMs}: CreateS3ObjectStoreOptions) {
+  constructor({
+    profile,
+    prefix,
+    transferRequestTimeoutMs,
+    publicEndpoint,
+  }: CreateS3ObjectStoreOptions) {
     assertObjectStoragePrefix(prefix);
     this.#bucket = profile.bucket;
     this.#prefix = prefix;
-    this.#clients = createObjectStorageS3Clients(profile, {transferRequestTimeoutMs});
+    this.#clients = createObjectStorageS3Clients(profile, {
+      transferRequestTimeoutMs,
+      publicEndpoint,
+    });
   }
 
   async checkReachable(): Promise<boolean> {
@@ -273,16 +334,94 @@ export class S3ObjectStore {
     this.#assertInScope(key);
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
     const url = await getSignedUrl(
-      this.#clients.control,
+      this.#clients.presign,
       new GetObjectCommand({Bucket: this.#bucket, Key: key}),
       {expiresIn: expiresInSeconds},
     );
     return {url, expiresAt};
   }
 
+  async createMultipartUpload(params: CreateMultipartUploadParams): Promise<string> {
+    this.#assertInScope(params.key);
+    const created = await this.#clients.control.send(
+      new CreateMultipartUploadCommand({
+        Bucket: this.#bucket,
+        Key: params.key,
+        ContentType: params.contentType,
+        Metadata: params.metadata,
+      }),
+    );
+    if (!created.UploadId) throw new Error('Object store returned no multipart upload id.');
+    return created.UploadId;
+  }
+
+  async presignUploadPart(params: PresignUploadPartParams): Promise<PresignedObjectGet> {
+    this.#assertInScope(params.key);
+    const expiresAt = new Date(Date.now() + params.expiresInSeconds * 1000);
+    const url = await getSignedUrl(
+      this.#clients.presign,
+      new UploadPartCommand({
+        Bucket: this.#bucket,
+        Key: params.key,
+        UploadId: params.uploadId,
+        PartNumber: params.partNumber,
+      }),
+      {expiresIn: params.expiresInSeconds},
+    );
+    return {url, expiresAt};
+  }
+
+  /**
+   * Completing a few hundred parts can outlast the control timeout, so this uses the transfer
+   * client. Set `transferRequestTimeoutMs` on the store to bound it. The outcomes the caller
+   * can act on are results; any other failure, such as a denied or timed-out request, throws.
+   */
+  async completeMultipartUpload(
+    params: CompleteMultipartUploadParams,
+  ): Promise<CompleteMultipartUploadResult> {
+    this.#assertInScope(params.key);
+    const parts = [...params.parts]
+      .sort((left, right) => left.number - right.number)
+      .map((part) => ({PartNumber: part.number, ETag: part.etag}));
+    try {
+      await this.#clients.transfer.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: this.#bucket,
+          Key: params.key,
+          UploadId: params.uploadId,
+          MultipartUpload: {Parts: parts},
+        }),
+      );
+      return {status: 'completed'};
+    } catch (error) {
+      const code = errorName(error);
+      if (code === 'NoSuchUpload') return {status: 'upload-not-found'};
+      if (code && REJECTED_PARTS_CODES.has(code)) return {status: 'rejected', code};
+      throw error;
+    }
+  }
+
+  /** Resolves when the upload is gone, including when it never existed or already completed. */
+  async abortMultipartUpload(params: AbortMultipartUploadParams): Promise<void> {
+    this.#assertInScope(params.key);
+    try {
+      await this.#clients.control.send(
+        new AbortMultipartUploadCommand({
+          Bucket: this.#bucket,
+          Key: params.key,
+          UploadId: params.uploadId,
+        }),
+      );
+    } catch (error) {
+      if (errorName(error) === 'NoSuchUpload') return;
+      throw error;
+    }
+  }
+
   close(): void {
     this.#clients.control.destroy();
     this.#clients.transfer.destroy();
+    this.#clients.presign.destroy();
   }
 
   #assertInScope(key: string): void {
@@ -309,8 +448,13 @@ export function assertObjectStoragePrefix(prefix: string): void {
   }
 }
 
-function isNotFoundError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
+function errorName(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
   const name = (error as {name?: unknown}).name;
+  return typeof name === 'string' ? name : undefined;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  const name = errorName(error);
   return name === 'NoSuchKey' || name === 'NotFound';
 }
