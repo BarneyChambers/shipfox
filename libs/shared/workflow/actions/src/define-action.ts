@@ -14,6 +14,20 @@ export interface ActionContext<Inputs extends ActionInputs = ActionInputs> {
    * over these values.
    */
   readonly setOutput: (name: string, value: unknown) => void;
+  /**
+   * Sets an environment variable for the later steps of the job. This step does not get it. The
+   * value is not masked: call `addMask` first when it is a credential.
+   */
+  readonly setEnv: (name: string, value: string) => void;
+  /** Puts a directory at the front of `PATH` for the later steps of the job. */
+  readonly addPath: (directory: string) => void;
+  /**
+   * Masks a value in the logs, outputs, and annotations of the later steps of the job, and in the
+   * outputs, annotations, and error message of this step. Logs this step already wrote stay as
+   * they are, so do not print the value. Needs at least 8 characters. A multi-line value is masked
+   * line by line, and a line shorter than 8 characters is not masked.
+   */
+  readonly addMask: (value: string) => void;
   readonly log: ActionLog;
   /** Fires on cancellation or timeout. */
   readonly signal: AbortSignal;
