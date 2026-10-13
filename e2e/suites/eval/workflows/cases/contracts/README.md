@@ -83,6 +83,8 @@ steps:
 
 Run the case once against the real provider and write the code the step reports. Providers do not agree on codes: a missing GitHub repository is `provider-rejected`, a missing ClickUp task or Notion page is `access-denied`, and Slack and PostHog answer `unknown`. A case with an input the provider rejects needs no target.
 
+In fake mode an `absent` target is never seeded, so the fake answers it like any unknown id, with the status and body the provider returned. A fake that serves a placeholder for an unknown id, such as ClickUp, Notion, Jira, and GitHub, is started with `rejectUnseeded` so it answers like the provider. An adapter that implements `deny` puts the `inaccessible` targets on its fake's deny list. Only the GitHub adapter does: Slack answers a private channel the bot has not joined the way it answers any channel it does not know.
+
 ## Generate the workflows
 
 The generator writes `.shipfox-staging/workflows/` at the repository root. The staging instance syncs that path. Never edit those files by hand.
