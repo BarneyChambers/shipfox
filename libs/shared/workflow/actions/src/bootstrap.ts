@@ -7,6 +7,7 @@ import {appendFileSync, readFileSync, writeFileSync} from 'node:fs';
 import {resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {inspect} from 'node:util';
+import {createActionCache} from '#cache/action-cache.js';
 import {ACTION_ENV, type ActionContextFileV1, type ActionResultFileV1} from '#contract.js';
 import {type ActionDefinition, type ActionInputs, isActionDefinition} from '#define-action.js';
 import {trackInFlightCalls} from '#in-flight-calls.js';
@@ -54,15 +55,25 @@ async function run(): Promise<void> {
   const definition = await importAction(env.actionPath, env.actionMain);
   const {context, outputs: declarations} = readJson<ActionContextFileV1>(env.contextPath);
   const outputs = createActionOutputs(declarations);
-  const calls = trackInFlightCalls(createToolsClient({url: env.actionsUrl, token: env.token}));
-
   const state = createActionState(env.statePath);
+  const log = createActionLog();
+  const calls = trackInFlightCalls(
+    createToolsClient({url: env.actionsUrl, token: env.token}),
+    createActionCache({
+      url: env.actionsUrl,
+      token: env.token,
+      log,
+      signal: controller.signal,
+      ...(env.tempDir ? {tempDir: env.tempDir} : {}),
+    }),
+  );
 
   let returned: unknown;
   try {
     returned = await definition.handler({
       inputs: readJson<ActionInputs>(env.inputsPath),
       tools: calls.tools,
+      cache: calls.cache,
       setOutput: (name, value) => {
         if (context.phase === 'post') {
           throw new ActionOutputError({
@@ -78,7 +89,7 @@ async function run(): Promise<void> {
         path: process.env[ACTION_ENV.path],
         mask: process.env[ACTION_ENV.mask],
       }),
-      log: createActionLog(),
+      log,
       signal: controller.signal,
       context,
     });
@@ -108,6 +119,8 @@ interface ActionEnvironment {
   outputPath: string;
   /** Absent when the runner provides no state file; `ctx.state.set` then fails. */
   statePath: string | undefined;
+  /** Absent on an older runner; the system temporary directory then holds archives. */
+  tempDir: string | undefined;
   actionPath: string;
   actionMain: string;
 }
@@ -127,6 +140,7 @@ function takeEnvironment(): ActionEnvironment {
     contextPath: required(ACTION_ENV.actionContext, process.env[ACTION_ENV.actionContext]),
     outputPath: required(ACTION_ENV.output, process.env[ACTION_ENV.output]),
     statePath: process.env[ACTION_ENV.state],
+    tempDir: process.env[ACTION_ENV.temp],
     actionPath: required(ACTION_ENV.actionPath, process.env[ACTION_ENV.actionPath]),
     actionMain: required(ACTION_ENV.actionMain, process.env[ACTION_ENV.actionMain]),
   };
@@ -135,7 +149,7 @@ function takeEnvironment(): ActionEnvironment {
 function abandonedCallsMessage(pending: readonly string[]): string | undefined {
   if (pending.length === 0) return undefined;
   const names = [...new Set(pending)].join(', ');
-  return `The action finished while tool calls were still running: ${names}. Await every tool call before the handler returns.`;
+  return `The action finished while calls were still running: ${names}. Await every tool and cache call before the handler returns.`;
 }
 
 function required(name: string, value: string | undefined): string {
