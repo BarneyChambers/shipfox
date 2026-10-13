@@ -12,6 +12,8 @@ import {
   type StepAttemptDisplayDuration,
 } from '#core/workflow-run.js';
 
+export const IGNORED_POST_FAILURE_TEXT = 'This step failed. The job result is unchanged.';
+
 export interface StepStatusVisual extends Omit<WorkflowStatusVisual, 'kind'> {
   kind: string;
   ripple: boolean;
@@ -22,11 +24,15 @@ export interface StepAttemptModel extends StepAttempt {
   displayDuration: StepAttemptDisplayDuration | null;
   statusVisual: StepStatusVisual;
   carriedOver: boolean;
+  /** A failed post whose failure leaves the job result unchanged. */
+  failureIgnored: boolean;
 }
 
 export interface StepModel extends Omit<Step, 'attempts'> {
   index: number;
   label: string;
+  /** Label of the step whose action declared this post, when that step is loaded. */
+  mainStepLabel?: string | undefined;
   attempts: StepAttemptModel[];
 }
 
@@ -51,7 +57,9 @@ export function buildStepListModel({
   jobExecution?: JobExecution | undefined;
 }): StepListModel {
   const selectedJobExecution = jobExecution ?? defaultStepListJobExecution(job);
-  const steps = [...selectedJobExecution.steps].sort(compareSteps).map(toStepModel);
+  const steps = withMainStepLabels(
+    [...selectedJobExecution.steps].sort(compareSteps).map(toStepModel),
+  );
   const entries = steps
     .flatMap((step) => toStepEntries(step, job.carriedOver))
     .sort(compareEntries);
@@ -125,14 +133,18 @@ function toStepModel(step: Step, index: number): StepModel {
     step.gateMaxAttempts === undefined
       ? undefined
       : Math.max(0, (step.attemptTotal ?? sortedAttempts.length) - sortedAttempts.length);
-  const attempts = sortedAttempts.map((attempt, attemptIndex) => ({
-    ...attempt,
-    attemptOrdinal:
-      gateAttemptOffset === undefined ? attempt.attempt : gateAttemptOffset + attemptIndex + 1,
-    displayDuration: attempt.displayDuration,
-    statusVisual: getStepStatusVisual(attempt.status),
-    carriedOver: false,
-  }));
+  const attempts = sortedAttempts.map((attempt, attemptIndex) => {
+    const failureIgnored = isIgnoredPostFailure(step, attempt.status);
+    return {
+      ...attempt,
+      attemptOrdinal:
+        gateAttemptOffset === undefined ? attempt.attempt : gateAttemptOffset + attemptIndex + 1,
+      displayDuration: attempt.displayDuration,
+      statusVisual: entryStatusVisual(attempt.status, failureIgnored),
+      carriedOver: false,
+      failureIgnored,
+    };
+  });
 
   return {
     ...step,
@@ -140,6 +152,22 @@ function toStepModel(step: Step, index: number): StepModel {
     label: stepLabel(step, index),
     attempts,
   };
+}
+
+function isIgnoredPostFailure(step: Pick<Step, 'type' | 'affectsJob'>, status: string): boolean {
+  return step.type === 'post' && step.affectsJob === false && normalizeStatus(status) === 'failed';
+}
+
+function entryStatusVisual(status: string, failureIgnored: boolean): StepStatusVisual {
+  const visual = getStepStatusVisual(status);
+  return failureIgnored ? {...visual, dot: 'warning', badge: 'warning'} : visual;
+}
+
+function withMainStepLabels(steps: StepModel[]): StepModel[] {
+  const labelById = new Map(steps.map((step) => [step.id, step.label]));
+  return steps.map((step) =>
+    step.mainStepId === undefined ? step : {...step, mainStepLabel: labelById.get(step.mainStepId)},
+  );
 }
 
 export function stepLabel(step: Step, index: number): string {
@@ -162,6 +190,8 @@ function toStepEntries(step: StepModel, carriedOverJob: boolean): StepListEntryM
 
   if (!carriedOverJob) return [];
 
+  const failureIgnored = isIgnoredPostFailure(step, step.status);
+
   return [
     {
       id: `carried-over:${step.id}`,
@@ -182,8 +212,9 @@ function toStepEntries(step: StepModel, carriedOverJob: boolean): StepListEntryM
       startedAt: step.createdAt,
       finishedAt: null,
       displayDuration: null,
-      statusVisual: getStepStatusVisual(step.status),
+      statusVisual: entryStatusVisual(step.status, failureIgnored),
       carriedOver: true,
+      failureIgnored,
       step,
     },
   ];
