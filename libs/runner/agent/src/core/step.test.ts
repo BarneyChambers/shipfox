@@ -37,11 +37,13 @@ vi.mock('@shipfox/runner-protocol', () => ({
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {
   AGENT_INTEGRATION_MCP_AUTH,
   AGENT_INTEGRATION_MCP_ENDPOINT,
   AGENT_INTEGRATION_MCP_SERVER_NAME,
   AGENT_INTEGRATION_MCP_TRANSPORT,
+  AGENT_TOOLS_MCP_SERVER_ID,
 } from '@shipfox/api-agent-dto';
 import type {StepDto} from '@shipfox/api-workflows-dto';
 import {logger} from '@shipfox/node-opentelemetry';
@@ -54,6 +56,10 @@ import {
 } from '#core/errors.js';
 import type {HarnessInvocation} from '#core/harness.js';
 import {executeAgentStep} from '#core/step.js';
+
+const FAKE_MCP_SERVER = fileURLToPath(
+  new URL('./fixtures/fake-stdio-mcp-server.sh', import.meta.url),
+);
 
 const RUNTIME = {
   harness: 'pi' as const,
@@ -378,19 +384,102 @@ describe('executeAgentStep', () => {
     expect(createIntegrationToolsGatewayFetchMock).toHaveBeenCalledWith(leaseToken, gatewayUrl);
     expect(createIntegrationToolsBridgeMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: AGENT_INTEGRATION_MCP_SERVER_NAME,
-        url: gatewayUrl,
-        fetch: gatewayFetch,
+        name: AGENT_TOOLS_MCP_SERVER_ID,
+        gateway: {url: gatewayUrl, fetch: gatewayFetch},
         preferredPort: expect.any(Number),
       }),
     );
     expect(runAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        mcpServers: [expect.objectContaining({name: AGENT_INTEGRATION_MCP_SERVER_NAME})],
+        mcpServers: [expect.objectContaining({name: AGENT_TOOLS_MCP_SERVER_ID})],
         requestedIntegrationTools: [{connectionSlug: 'github_main', toolId: 'issue_read'}],
       }),
     );
     expect(bridgeCloseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts custom MCP servers for the harness run and stops them after it', async () => {
+    let duringRun: unknown;
+    runAgentMock.mockImplementation(async () => {
+      const {customServers} = createIntegrationToolsBridgeMock.mock.calls[0]?.[0] as unknown as {
+        customServers: {callTool: (params: {name: string}) => Promise<unknown>};
+      };
+      duringRun = await customServers.callTool({name: 'fake__secret_length'});
+      return {};
+    });
+
+    await executeAgentStep(
+      buildAgentStep({
+        config: {
+          prompt: 'p',
+          customMcpServers: [
+            {
+              name: 'fake',
+              command: 'sh',
+              args: [FAKE_MCP_SERVER],
+              env: {},
+              include: ['secret_length'],
+            },
+          ],
+        },
+      }),
+      {runtime: RUNTIME, customMcpServerSecretEnv: {fake: {FAKE_SECRET: 'abcd'}}},
+    );
+
+    const {customServers} = createIntegrationToolsBridgeMock.mock.calls[0]?.[0] as unknown as {
+      customServers: {callTool: (params: {name: string}) => Promise<unknown>};
+    };
+    expect(createIntegrationToolsBridgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({name: AGENT_TOOLS_MCP_SERVER_ID, gateway: undefined}),
+    );
+    expect(runAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mcpServers: [expect.objectContaining({name: AGENT_TOOLS_MCP_SERVER_ID})],
+        requestedIntegrationTools: [{connectionSlug: 'fake', toolId: 'secret_length'}],
+      }),
+    );
+    expect(duringRun).toEqual({content: [{type: 'text', text: 'length:4'}]});
+    await expect(customServers.callTool({name: 'fake__secret_length'})).resolves.toMatchObject({
+      isError: true,
+    });
+    expect(bridgeCloseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails with agent_mcp_server_unavailable when a custom MCP server does not start', async () => {
+    const result = await executeAgentStep(
+      buildAgentStep({
+        config: {
+          prompt: 'p',
+          customMcpServers: [
+            {name: 'fake', command: 'sh', args: [FAKE_MCP_SERVER], env: {FAKE_EXIT_CODE: '1'}},
+          ],
+        },
+      }),
+      {runtime: RUNTIME},
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        message: 'MCP server "fake" did not start: exited with code 1.',
+        reason: 'agent_mcp_server_unavailable',
+      },
+      exit_code: null,
+    });
+    expect(runAgentMock).not.toHaveBeenCalled();
+    expect(createIntegrationToolsBridgeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid custom MCP server config', async () => {
+    const result = await executeAgentStep(
+      buildAgentStep({config: {prompt: 'p', customMcpServers: [{name: 'fake'}]}}),
+      {runtime: RUNTIME},
+    );
+
+    expect(result.error).toMatchObject({
+      message: 'Agent step config has invalid MCP servers.',
+      reason: 'agent_config_invalid',
+    });
   });
 
   it('derives deterministic bridge ports in the non-ephemeral range', async () => {

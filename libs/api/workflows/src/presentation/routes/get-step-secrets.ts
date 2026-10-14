@@ -27,7 +27,7 @@ export function createGetStepSecretsRoute(
     method: 'GET',
     path: '/steps/:stepId/secrets',
     description:
-      "Returns decrypted secret values referenced by the runner's currently leased running run, action, or post step, or setup step with a job container. The job scope and secret bindings are re-derived from server state; the runner supplies only the step id and current attempt.",
+      "Returns decrypted secret values referenced by the runner's currently leased running run, action, post, or agent step, or setup step with a job container. The job scope and secret bindings are re-derived from server state; the runner supplies only the step id and current attempt.",
     schema: {
       params: stepSecretsParamsSchema,
       querystring: stepSecretsQuerySchema,
@@ -56,7 +56,7 @@ export function createGetStepSecretsRoute(
       });
 
       if (!stepHasSecretBindings(step)) {
-        throw new ClientError('Step is not a run, action, or post step', 'step-not-run', {
+        throw new ClientError('Step is not a run, action, post, or agent step', 'step-not-run', {
           status: 409,
         });
       }
@@ -143,8 +143,16 @@ export function createGetStepSecretsRoute(
 }
 
 // A setup step carries secrets only for a job container, so a plain setup step has none to pull.
+// An agent step carries them for the env of its MCP servers.
 function stepHasSecretBindings(step: {type: string; config: Record<string, unknown>}): boolean {
-  if (step.type === 'run' || step.type === 'action' || step.type === 'post') return true;
+  if (
+    step.type === 'run' ||
+    step.type === 'action' ||
+    step.type === 'post' ||
+    step.type === 'agent'
+  ) {
+    return true;
+  }
   return step.type === 'setup' && step.config.container !== undefined;
 }
 
