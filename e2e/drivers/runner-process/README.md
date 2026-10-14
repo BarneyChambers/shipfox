@@ -5,7 +5,9 @@ Runner capacity for an end-to-end suite: provisioner tokens, a Docker provisione
 ## What it does
 
 - **`mintProvisionerToken`** creates a workspace provisioner token.
+- **`mintInstallationProvisionerToken`** creates an installation-wide token with the administrator route and an idempotency key.
 - **`startProvisioner` and `stopProvisioner`** run a Docker provisioner for the length of a suite. The provisioner starts real runner containers, the same way production does.
+- **`pollDemand` and `pollDemandUntil`** send authenticated demand polls without starting a runner.
 - **`mintManualRegistrationToken`** creates a manual runner registration token.
 - **`startLocalRunner`, `stopLocalRunner`, `waitForLocalRunnerExit`, and `localRunnerLogTail`** run one runner as a host process.
 - **`publishJobContainerImage` and `removePublishedJobContainerImage`** build an image and serve it from a local registry, for a job `container`.
@@ -41,6 +43,8 @@ Source mode needs the app each helper runs in the `package.json` of the suite:
 | `startLocalRunner` without `installDir` | `@shipfox/runner` |
 
 This package does not depend on them, because they are not published. Turbo then builds them before `test:e2e`.
+
+Installation-scope demand polling requires the API to run with `E2E_ENABLED=true` and `E2E_ADMIN_API_KEY` set. Without this E2E installation policy, the demand route returns `403`.
 
 ## Usage
 
@@ -86,14 +90,29 @@ await stopProvisioner(handle);
 
 Calls `POST /workspaces/:workspaceId/provisioners/tokens` and returns the created token. Pass `raw_token` to `startProvisioner`. The API returns it only once.
 
+### `mintInstallationProvisionerToken(params)`
+
+Calls `POST /admin/runners/provisioner-tokens` with the administrator bearer and an `Idempotency-Key`. The helper supplies an E2E reason by default and returns the raw token once.
+
+Installation readiness uses `adminToken` and the administrator runner-capacity read for `workspaceId`; workspace readiness uses `userToken` and the workspace active-provisioner read.
+
+### `pollDemand(params)` and `pollDemandUntil(params)`
+
+`pollDemand` sends one request to `POST /provisioners/demand/poll` using the provisioner bearer. Templates use `{name, labels}` and advertise one available slot by default. A reservation grant throws immediately because this driver has no runner to claim it.
+
+`pollDemandUntil` repeats the request every `intervalMs` (default 1 second), calls the async `until` predicate after each response, and rejects with `DemandPollTimeoutError` containing the last response and `pollCount` after `timeoutMs` (default 30 seconds). Each request returns immediately (`waitSeconds` defaults to `0` here) so the timeout is not spent inside one long poll. An early poll may find no demand because run creation is asynchronous.
+
 ### `startProvisioner(params)`
 
-Starts the provisioner, appends its output to `logFile`, and resolves once the provisioner is active for the workspace. It rejects, after stopping the provisioner, when the process exits first or the readiness budget (default 30 s) runs out. Keep `logFile` as a CI artifact.
+Starts the provisioner, appends its output to `logFile`, and resolves once the provisioner is active for the workspace. In installation scope it resolves once the API is reachable and the token has installation scope, which does not prove the process is polling. It rejects, after stopping the provisioner, when the process exits first or the readiness budget (default 30 s) runs out. Keep `logFile` as a CI artifact.
 
 | Parameter | Mode | Purpose |
 | --- | --- | --- |
 | `mode` | both | `source` (default) or `image`. |
-| `workspaceId`, `userToken` | both | The workspace, and a user session bearer that polls its active provisioners. |
+| `scope` | both | `workspace` (default) or `installation`. |
+| `workspaceId` | both | Workspace used for readiness. Installation scope uses its administrator capacity read. |
+| `userToken` | workspace | User session bearer that polls active provisioners. |
+| `adminToken` | installation | Administrator bearer used for the capacity readiness read. |
 | `provisionerToken`, `tokenPrefix` | both | The token, and its prefix to match in the active list. |
 | `templatesFile`, `logFile` | both | The templates YAML and the log file. |
 | `readinessTimeoutMs` | both | Readiness budget. |
@@ -169,7 +188,7 @@ turbo build --filter=@shipfox/e2e-driver-runner-process
 turbo test --filter=@shipfox/e2e-driver-runner-process
 ```
 
-The unit tests cover the `docker run` arguments and the environment of each mode. Process spawning, signals, and readiness are covered by the E2E suites that start capacity.
+The unit tests cover the `docker run` arguments and the environment of each mode, installation token headers, demand polling, reservation guards, and timeout behavior. Process spawning, signals, and readiness are covered by the E2E suites that start capacity.
 
 ## License
 
