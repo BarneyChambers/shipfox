@@ -1,0 +1,70 @@
+---
+title: "Coding agent files"
+sidebarTitle: "Coding Agents"
+description: "Look up the repository files that agent steps read and ignore, and the prompt that Shipfox adds."
+---
+
+import RepositoryContextFiles from '../../generated/reference/repository-context-files.mdx';
+import ShipfoxSystemPrompt from '../../generated/reference/shipfox-system-prompt.mdx';
+
+Agent steps read the instruction files and the skills in your repository. The
+`pi` and `claude` harnesses use the same rules. Turn them off with
+[`repository_context`](/reference/workflow-schema#agent-repository-context-fields).
+
+## Files that agent steps read
+
+<RepositoryContextFiles />
+
+Shipfox looks in each directory from the repository root to the working
+directory. The repository root is the nearest directory that contains `.git`.
+If there is no `.git`, Shipfox looks only in the working directory.
+
+### Instructions
+
+- In each directory, Shipfox reads the first file that is not empty.
+- Shipfox adds the files after the step prompt. The step prompt has priority.
+- Shipfox does not expand `@path` imports.
+- Shipfox does not read files below the working directory. The agent reads them
+  when it changes files there.
+
+### Skills
+
+- The agent sees the `name` and the `description` of each skill. It reads the
+  full skill only when it uses the skill.
+- If `name` is missing, Shipfox uses the directory name.
+- If `description` is missing, Shipfox skips the skill.
+- If two skills have the same name, Shipfox uses the skill nearest to the
+  working directory. In the same directory, `.agents/skills` has priority over
+  `.claude/skills`.
+- A skill that two paths link to loads one time.
+- If a skill listed in `repository_context` does not exist, the step fails.
+
+## Files that agent steps ignore
+
+Shipfox does not read files that run code, change permissions, or replace the
+system prompt. Shipfox does not read the home directory of the runner.
+
+| Files | Belongs to |
+| --- | --- |
+| `.claude/settings.json`, `.claude/settings.local.json`, hooks, `CLAUDE.local.md`, `.claude/CLAUDE.md`, `.claude/rules/` | Claude Code |
+| `.mcp.json` | Claude Code and other MCP clients |
+| `.pi/settings.json`, `.pi/extensions/`, `.pi/skills/`, `.pi/prompts/`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` | pi |
+| `AGENTS.override.md`, `.codex/` | Codex |
+| `opencode.json`, `.opencode/` | OpenCode |
+| `.cursor/rules/`, `.cursor/skills/` | Cursor |
+| `~/.claude/`, `~/.pi/`, `~/.agents/`, `~/.codex/` | The runner's home directory |
+
+## Compatibility with coding agents
+
+| Coding agent | Instruction files | Skill directories | Agent steps also read |
+| --- | --- | --- | --- |
+| Claude Code | `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`. `AGENTS.md` if there is no `CLAUDE.md`. | `.claude/skills` | `CLAUDE.md`, `AGENTS.md`, `.claude/skills` |
+| Codex | `AGENTS.override.md`, then `AGENTS.md` | `.agents/skills` | `AGENTS.md`, `.agents/skills` |
+| OpenCode | `AGENTS.md`. `CLAUDE.md` if there is no `AGENTS.md`. | `.opencode/skills`, `.claude/skills`, `.agents/skills` | `AGENTS.md`, `CLAUDE.md`, `.claude/skills`, `.agents/skills` |
+| Cursor | `.cursor/rules/`, `AGENTS.md` | `.cursor/skills`, `.agents/skills`, `.claude/skills`, `.codex/skills` | `AGENTS.md`, `.agents/skills`, `.claude/skills` |
+
+## Shipfox system prompt
+
+Shipfox adds this text to the end of the default system prompt of the harness.
+
+<ShipfoxSystemPrompt components={props.components} />
