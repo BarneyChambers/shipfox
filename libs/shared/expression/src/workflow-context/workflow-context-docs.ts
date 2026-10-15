@@ -208,6 +208,15 @@ export const workflowContextDocs = [
       'The keys are the secret names the workspace defines. See [Manage secrets and variables](/how-to/set-up-work/secrets-and-variables).',
   },
   {
+    root: 'runner',
+    summary:
+      'The runner that runs the job. Read it in fields that Shipfox fills when a step starts, such as `if`, `run`, `env`, and `with`. Values are lowercase. GitHub Actions uses `Linux` and `X64`.',
+    fields: {
+      os: 'Operating system of the runner: `linux`, `darwin`, or `windows`.',
+      arch: 'CPU architecture of the runner, such as `x64` or `arm64`. A job container runs the same architecture.',
+    },
+  },
+  {
     root: 'result',
     summary: 'The result returned by the current tool step.',
     shapeNote:

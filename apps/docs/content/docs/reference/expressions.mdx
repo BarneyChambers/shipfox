@@ -118,6 +118,7 @@ message names the cause. It is not skipped.
 | `range(start, stop, step)` | `range(1, 3, 1)` | An inclusive list of integers |
 | `toJson(value)` | `toJson(event.pull_request.labels)` | The value serialized as compact JSON text |
 | `fromJson(string)` | `fromJson(event.payload)` | The JSON text parsed into a dynamic CEL value |
+| `hashFiles(pattern, ...)` | `hashFiles('package-lock.json')` | A hash of the files that match. See [Hash files](#hash-files) |
 
 `list.first()` and `list.last()` keep the element's type. Calling either method
 on an empty list causes an evaluation error. A job or step `if` that hits one
@@ -138,6 +139,74 @@ runtime failure still makes the surrounding predicate fail.
 The [CEL language
 definition](https://github.com/google/cel-spec/blob/master/doc/langdef.md#standard-definitions)
 documents the full standard library.
+
+## Hash files
+
+`hashFiles()` gives a hash of files. Use it in a cache key:
+
+```yaml
+key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+```
+
+The hash has 32 characters, `0-9` and `a-f`. It changes when the path or the
+content of a file changes.
+
+### Choose the files
+
+Give the paths of the files to hash. Write each path from the root of your
+repository, or from the `working_directory` of the step when it has one. Put
+each path in quotes, and separate paths with commas. Give at most 16 paths:
+
+```yaml
+# One file
+key: deps-${{ hashFiles('package-lock.json') }}
+```
+
+```yaml
+# Two files
+key: deps-${{ hashFiles('package-lock.json', 'pnpm-workspace.yaml') }}
+```
+
+```yaml
+# All package.json files one folder under packages
+key: deps-${{ hashFiles('packages/*/package.json') }}
+```
+
+A path can contain wildcards to match many files:
+
+| Wildcard | Matches | Example |
+| --- | --- | --- |
+| `*` | Any characters in one folder or file name | `*.lock` |
+| `**` | Any number of folders | `**/package-lock.json` |
+| `?` | One character | `v?.txt` |
+| `[...]` | One of the characters in the brackets | `v[12].txt` |
+| `{a,b}` | One of the comma-separated words | `{yarn,pnpm}.lock` |
+
+Rules:
+
+- A path must name files in that folder. Do not start a path with `~` or
+  `/`. Do not use `..`.
+- Put `hashFiles()` alone in its `${{ }}`. Write `npm-${{ hashFiles('x') }}`. Do
+  not write `${{ 'npm-' + hashFiles('x') }}`.
+
+### Where to use it
+
+Use `hashFiles()` in `run`, in `env` values, and in the `with` of an action.
+Other fields, such as `if`, cannot use it.
+
+The hash includes the files that earlier steps of the job created or changed.
+
+### Errors
+
+The step fails when:
+
+- No file matches the paths. GitHub Actions does not fail in this case.
+- The paths match more than 10,000 files.
+- The files are larger than 1 GiB in total.
+- Hashing takes more than 60 seconds.
+
+If the step fails because of a limit, use a more specific path. For example,
+use `package-lock.json`, not `**/package-lock.json`.
 
 ## Related pages
 

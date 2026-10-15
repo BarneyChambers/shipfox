@@ -44,6 +44,7 @@ import {
 import {
   classifyReportedStep,
   nextStepForJob,
+  nextStepForLeasedJobExecution,
   recordStepResult as recordJobExecutionStepResult,
   TOOL_STEP_RETRY_AFTER_MS,
 } from './job-execution.js';
@@ -681,6 +682,40 @@ describe('nextStepForJob', () => {
     });
     expect(after.find((step) => step.id === runnableStep.id)?.status).toBe('running');
     expect(await getStepAttempts(jobId)).toMatchObject([{stepId: runnableStep.id}]);
+  });
+
+  test('fills the runner context from the claiming session when a step reads it', async () => {
+    const {steps} = await arrangeJobWithSteps(2);
+    const [armOnly, always] = steps;
+    if (!armOnly || !always) throw new Error('Expected arranged steps');
+    await db()
+      .update(stepsTable)
+      .set({condition: conditionExpression('runner.arch == "arm64"')})
+      .where(eq(stepsTable.id, armOnly.id));
+    const runnerPlatform = vi.fn(async () => ({os: 'linux' as const, arch: 'x64'}));
+
+    const result = await nextStepForLeasedJobExecution({
+      jobExecutionId: armOnly.jobExecutionId,
+      runnerPlatform,
+    });
+
+    expect(result).toEqual({
+      kind: 'step',
+      step: expect.objectContaining({id: always.id}),
+      dispatched: true,
+    });
+    expect(runnerPlatform).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not read the runner platform for a step that does not use it', async () => {
+    const {steps} = await arrangeJobWithSteps(1);
+    const [only] = steps;
+    if (!only) throw new Error('Expected an arranged step');
+    const runnerPlatform = vi.fn(async () => ({os: 'linux' as const, arch: 'x64'}));
+
+    await nextStepForLeasedJobExecution({jobExecutionId: only.jobExecutionId, runnerPlatform});
+
+    expect(runnerPlatform).not.toHaveBeenCalled();
   });
 
   test('fails a step whose condition errors and skips the later default steps', async () => {
