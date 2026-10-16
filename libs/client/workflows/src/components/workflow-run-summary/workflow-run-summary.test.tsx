@@ -1,4 +1,9 @@
-import {authStateAtom} from '@shipfox/client-shell/runtime';
+import {
+  authStateAtom,
+  ChromeProvider,
+  type ChromeSlots,
+  type WorkflowRunActionsProps,
+} from '@shipfox/client-shell/runtime';
 import {
   createMemoryHistory,
   createRootRoute,
@@ -7,7 +12,7 @@ import {
   Outlet,
   RouterProvider,
 } from '@tanstack/react-router';
-import {render, screen, waitFor, within} from '@testing-library/react';
+import {cleanup, render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {createStore, Provider as JotaiProvider} from 'jotai';
 import {
@@ -18,12 +23,14 @@ import {
 import {WorkflowRunSummary} from './workflow-run-summary.js';
 
 const RUN_ID = '66666666-6666-4666-8666-666666666666';
+const PROJECT_ID = '44444444-4444-4444-8444-444444444444';
 const RELATIVE_TIME_TEXT_PATTERN = /ago$/;
 const OLD_ROOT_TIME_TEXT_PATTERN = /(?:1d|24h) ago/;
 const COPY_RUN_BUTTON_NAME = /Copy run/;
 const DEV_BADGE_TEXT = 'Dev';
 const AT_SIGN_TEXT = /@/;
 const REPLAY_OF_TEXT = /Replay of/;
+const REACT_ID_PATTERN = /_r_\w+_/g;
 
 const originalScrollWidth = Object.getOwnPropertyDescriptor(
   window.HTMLElement.prototype,
@@ -631,13 +638,50 @@ describe('WorkflowRunSummary', () => {
   });
 });
 
+describe('WorkflowRunSummary run actions slot', () => {
+  test('renders the provided slot with the run ids before the re-run action', async () => {
+    function WorkflowRunActions({workflowRunId, projectId}: WorkflowRunActionsProps) {
+      return (
+        <button type="button">
+          Improve {workflowRunId} {projectId}
+        </button>
+      );
+    }
+
+    renderSummary({status: 'succeeded'}, {onRerun: vi.fn()}, {WorkflowRunActions});
+
+    const slotAction = await screen.findByRole('button', {
+      name: `Improve ${RUN_ID} ${PROJECT_ID}`,
+    });
+    const rerun = screen.getByRole('button', {name: 'Re-run workflow'});
+    expect(slotAction.compareDocumentPosition(rerun)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  test('renders the same summary when the chrome omits the slot', async () => {
+    renderSummary({status: 'succeeded'}, {onRerun: vi.fn()});
+    const withoutChrome = summaryMarkup(await screen.findByRole('region', {name: 'deploy-web'}));
+    cleanup();
+
+    renderSummary({status: 'succeeded'}, {onRerun: vi.fn()}, {});
+    const withoutSlot = summaryMarkup(await screen.findByRole('region', {name: 'deploy-web'}));
+
+    expect(withoutSlot).toBe(withoutChrome);
+  });
+});
+
+/** The summary's markup, with the per-render React ids normalized. */
+function summaryMarkup(summary: HTMLElement): string {
+  return summary.outerHTML.replace(REACT_ID_PATTERN, 'id');
+}
+
 function renderSummary(
   overrides: Parameters<typeof workflowRunOverview>[0] = {},
   props: Omit<Parameters<typeof WorkflowRunSummary>[0], 'run'> = {},
+  chromeSlots?: Partial<ChromeSlots>,
 ) {
   const run = workflowRunOverview({
     id: RUN_ID,
-    project_id: '44444444-4444-4444-8444-444444444444',
+    project_id: PROJECT_ID,
     definition_id: '55555555-5555-4555-8555-555555555555',
     name: 'deploy-web',
     status: 'running',
@@ -649,7 +693,31 @@ function renderSummary(
   });
 
   // These cases never mount the attempt switcher links, so no router is needed.
-  render(<WorkflowRunSummary run={run} {...props} />);
+  if (!chromeSlots) {
+    render(<WorkflowRunSummary run={run} {...props} />);
+    return;
+  }
+  const chrome: ChromeSlots = {
+    ProjectBreadcrumb: () => null,
+    projectSlugResolver: async () => 'project',
+    ...chromeSlots,
+  };
+  // The run actions slot reads the router location.
+  const rootRoute = createRootRoute({component: Outlet});
+  const runRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/runs/$workflowRunId',
+    component: () => <WorkflowRunSummary run={run} {...props} />,
+  });
+  const router = createRouter({
+    history: createMemoryHistory({initialEntries: [`/runs/${run.id}`]}),
+    routeTree: rootRoute.addChildren([runRoute]),
+  });
+  render(
+    <ChromeProvider chrome={chrome}>
+      <RouterProvider router={router} />
+    </ChromeProvider>,
+  );
 }
 
 function devSourceDto() {
