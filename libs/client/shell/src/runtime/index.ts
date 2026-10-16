@@ -17,6 +17,12 @@ export type {
   WorkspaceSummary,
 } from '#core/session.js';
 export {
+  loginMethodsQueryOptions,
+  type PasswordLoginAvailability,
+  prefetchLoginMethods,
+  usePasswordLoginAvailability,
+} from '#hooks/api/login-methods.js';
+export {
   type SessionResponseDto,
   toAuthenticatedSession,
   toUserIdentity,

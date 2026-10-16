@@ -1,0 +1,54 @@
+import {loginMethodsResponseSchema} from '@shipfox/api-auth-dto';
+import {checkedApiRequest} from '@shipfox/client-api';
+import {
+  type FetchQueryOptions,
+  type QueryClient,
+  queryOptions,
+  useQuery,
+} from '@tanstack/react-query';
+
+const loginMethodsQueryKey = ['auth', 'login-methods'] as const;
+
+type LoginMethodsQueryOptions = FetchQueryOptions<
+  string[],
+  Error,
+  string[],
+  typeof loginMethodsQueryKey
+>;
+
+export type PasswordLoginAvailability = 'pending' | 'available' | 'unavailable';
+
+async function listLoginMethods(signal?: AbortSignal): Promise<string[]> {
+  const response = await checkedApiRequest(loginMethodsResponseSchema, '/auth/login-methods', {
+    signal,
+  });
+  return response.login_methods.map(({id}) => id);
+}
+
+/** Login method ids the server composition offers, such as `password` or `oauth:github`. */
+export function loginMethodsQueryOptions(): LoginMethodsQueryOptions {
+  return queryOptions({
+    queryKey: loginMethodsQueryKey,
+    queryFn: ({signal}) => listLoginMethods(signal),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Starts the lookup early, for example in a route's `beforeLoad`. */
+export function prefetchLoginMethods(queryClient: QueryClient | undefined): void {
+  void queryClient?.prefetchQuery(loginMethodsQueryOptions());
+}
+
+/**
+ * Whether the server offers password login. Stays `pending` while the lookup
+ * retries or waits offline. A lookup that still fails counts as `available`, so
+ * password installs keep their pages and other installs see the password pages
+ * they had before the lookup existed.
+ */
+export function usePasswordLoginAvailability(): PasswordLoginAvailability {
+  const loginMethods = useQuery(loginMethodsQueryOptions());
+  if (loginMethods.isPending) return 'pending';
+  if (loginMethods.isError) return 'available';
+  return loginMethods.data.includes('password') ? 'available' : 'unavailable';
+}

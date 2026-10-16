@@ -3,6 +3,7 @@ import {
   AuthShell,
   Shippy,
   useAuthState,
+  usePasswordLoginAvailability,
   useRefreshAuth,
   useRouteSearch,
 } from '@shipfox/client-shell/runtime';
@@ -201,27 +202,13 @@ export function InvitationAcceptPage() {
       : `Invited to join as ${data.email}.`;
 
   if (!auth.isAuthenticated) {
-    const redirect = `/invitations/accept?token=${encodeURIComponent(token)}`;
-    const signupHref = `/auth/signup?redirect=${encodeURIComponent(redirect)}`;
-    const loginHref = `/auth/login?redirect=${encodeURIComponent(redirect)}`;
     return (
-      <AuthShell
-        title={data.workspaceName}
-        description={inviterLine}
-        illustration={<Shippy pose="bench" className="h-104" />}
-      >
-        <div className="flex flex-col gap-group">
-          <Button asChild className="w-full">
-            <Link to={signupHref}>Create account</Link>
-          </Button>
-          <Button asChild className="w-full" variant="secondary">
-            <Link to={loginHref}>I already have an account</Link>
-          </Button>
-        </div>
-        <Text size="xs" className="text-center text-foreground-neutral-muted">
-          Not {data.email}? Contact your administrator.
-        </Text>
-      </AuthShell>
+      <InvitationGuestState
+        token={token}
+        email={data.email}
+        inviterLine={inviterLine}
+        workspaceName={data.workspaceName}
+      />
     );
   }
 
@@ -305,6 +292,68 @@ export function InvitationAcceptPage() {
         </Text>
       </div>
     </AuthShell>
+  );
+}
+
+function InvitationGuestState({
+  token,
+  email,
+  inviterLine,
+  workspaceName,
+}: {
+  token: string;
+  email: string;
+  inviterLine: string;
+  workspaceName: string;
+}) {
+  const passwordLogin = usePasswordLoginAvailability();
+
+  return (
+    <AuthShell
+      title={workspaceName}
+      description={inviterLine}
+      illustration={<Shippy pose="bench" className="h-104" />}
+    >
+      {passwordLogin === 'pending' ? (
+        <CenteredLoader />
+      ) : (
+        <InvitationGuestActions token={token} passwordLogin={passwordLogin === 'available'} />
+      )}
+      <Text size="xs" className="text-center text-foreground-neutral-muted">
+        Not {email}? Contact your administrator.
+      </Text>
+    </AuthShell>
+  );
+}
+
+export function InvitationGuestActions({
+  token,
+  passwordLogin,
+}: {
+  token: string;
+  passwordLogin: boolean;
+}) {
+  const redirect = `/invitations/accept?token=${encodeURIComponent(token)}`;
+  const loginHref = `/auth/login?redirect=${encodeURIComponent(redirect)}`;
+
+  if (!passwordLogin) {
+    return (
+      <Button asChild className="w-full">
+        <Link to={loginHref}>Continue</Link>
+      </Button>
+    );
+  }
+
+  const signupHref = `/auth/signup?redirect=${encodeURIComponent(redirect)}`;
+  return (
+    <div className="flex flex-col gap-group">
+      <Button asChild className="w-full">
+        <Link to={signupHref}>Create account</Link>
+      </Button>
+      <Button asChild className="w-full" variant="secondary">
+        <Link to={loginHref}>I already have an account</Link>
+      </Button>
+    </div>
   );
 }
 
