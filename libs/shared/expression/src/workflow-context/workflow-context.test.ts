@@ -7,6 +7,7 @@ import {InvalidWorkflowExpressionError} from '../expression/errors.js';
 import {
   type AvailabilitySite,
   availabilitySites,
+  buildCompositeScopeEnvironment,
   buildTypedRootsEnvironment,
   contextRootsForField,
   type FillTarget,
@@ -66,6 +67,7 @@ describe('workflow context registry', () => {
     expect(workflowContextReservedRoots).toEqual({
       matrix: {host: 'server', availability: 'job-activation'},
       result: {host: 'server', availability: 'step-report'},
+      action: {host: 'server', availability: 'step-dispatch'},
     });
     expect(workflowContextNames).toContain('jobs');
     expect(workflowContextNames).toContain('needs');
@@ -73,6 +75,7 @@ describe('workflow context registry', () => {
     expect(workflowContextNames).toContain('steps');
     expect(workflowContextNames).not.toContain('matrix');
     expect(workflowContextNames).not.toContain('result');
+    expect(workflowContextNames).not.toContain('action');
   });
 
   it('marks known-shape contexts as typed and open contexts as syntax-only', () => {
@@ -1218,6 +1221,7 @@ describe('workflow interpolation field policies', () => {
       'tool.with',
       'tool.outputs',
       'action.with',
+      'action.outputs',
     ]);
     expect(Object.keys(workflowInterpolationFieldPolicies)).toEqual(workflowInterpolationFields);
   });
@@ -1265,6 +1269,7 @@ describe('workflow interpolation field policies', () => {
     ['tool.with', ['server']],
     ['tool.outputs', ['server']],
     ['action.with', ['server', 'runner']],
+    ['action.outputs', ['server']],
   ] satisfies readonly [
     WorkflowInterpolationField,
     readonly string[],
@@ -1323,3 +1328,23 @@ function noServerAvailabilityReference(): Readonly<Record<AvailabilitySite, bool
     boolean
   >;
 }
+
+describe('buildCompositeScopeEnvironment', () => {
+  it('types the composite inputs and the action root', () => {
+    expect(
+      buildCompositeScopeEnvironment({
+        inputs: {base_sha: {type: 'string', required: true}, count: {type: 'number'}},
+      }),
+    ).toEqual({
+      inputs: {
+        kind: 'object',
+        fields: {base_sha: 'string', count: expect.anything()},
+      },
+      action: {kind: 'object', fields: {path: 'string'}},
+    });
+  });
+
+  it('limits composite output values to inputs and steps', () => {
+    expect(contextRootsForField('action.outputs')).toEqual(['inputs', 'steps']);
+  });
+});

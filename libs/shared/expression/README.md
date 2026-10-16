@@ -54,6 +54,10 @@ CEL checks and run-time evaluation for Shipfox workflow expressions.
   Planning gives such a segment the `runner-fill` target and a `runnerCall`.
 - **`buildTypedRootsEnvironment`**: Builds typed step and job roots. Tool steps
   expose `outputs.result` from their catalog schema and omit `exit_code`.
+- **`buildCompositeScopeEnvironment`**: Builds the roots a composite action
+  replaces for its inner steps: `inputs` typed from its input declarations, and
+  the reserved `action` root (`action.path`). `action.outputs` is the field
+  for a composite output `value`, which reads `inputs` and `steps` only.
 - **`toolStepReportTypeEnvironment`** and **`WorkflowStepKind`**: Describe the
   gate context (`status`, `outputs`, and `error`) and kind metadata for
   tool-step expression checks.
