@@ -134,6 +134,27 @@ describe('ClickUp webhook envelopes', () => {
     expect('history_items' in result).toBe(false);
   });
 
+  it('parses a history item without data, source, or before, as ClickUp sends a tag change', () => {
+    const {data: _data, source: _source, before: _before, ...tagItem} = historyItem;
+    const sample = {
+      ...taskCreatedSample,
+      event: 'taskTagUpdated',
+      history_items: [{...tagItem, field: 'tag', after: [{name: 'shipfox'}]}],
+    };
+
+    expect(clickupWebhookEnvelopeSchema.safeParse(sample).success).toBe(true);
+  });
+
+  it('parses a history item without after, and a user whose profile fields are null', () => {
+    const {after: _after, ...item} = historyItem;
+    const sample = {
+      ...taskStatusUpdatedSample,
+      history_items: [{...item, user: {id: 61234567, username: null, email: null, initials: null}}],
+    };
+
+    expect(clickupWebhookEnvelopeSchema.safeParse(sample).success).toBe(true);
+  });
+
   it('rejects actor-bearing events without history items', () => {
     const taskResult = clickupTaskWebhookEnvelopeSchema.safeParse({
       ...taskStatusUpdatedSample,
@@ -171,8 +192,8 @@ describe('ClickUp install and tool DTOs', () => {
     expect('error' in errorResult && errorResult.error).toBe('access_denied');
   });
 
-  it('exposes exactly the six ClickUp agent tools and both scopes', () => {
-    expect(clickupAgentToolIds).toHaveLength(6);
+  it('exposes exactly the nine ClickUp agent tools and both scopes', () => {
+    expect(clickupAgentToolIds).toHaveLength(9);
     expect(clickupAgentToolIds).toEqual([
       'get_task',
       'search_tasks',
@@ -180,6 +201,9 @@ describe('ClickUp install and tool DTOs', () => {
       'create_task',
       'update_task',
       'add_comment',
+      'add_tag',
+      'remove_tag',
+      'set_custom_field',
     ]);
     expect(clickupAgentToolIdSchema.parse('get_task')).toBe('get_task');
     expect(clickupAgentToolRequiredScopeSchema.parse('read')).toBe('read');
