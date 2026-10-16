@@ -9148,6 +9148,9 @@ importers:
       '@shipfox/actions':
         specifier: workspace:*
         version: link:../../shared/workflow/actions
+      '@shipfox/api-runners-dto':
+        specifier: workspace:*
+        version: link:../../api/runners-dto
       '@shipfox/api-secrets-dto':
         specifier: workspace:*
         version: link:../../api/secrets-dto
