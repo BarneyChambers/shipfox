@@ -2367,10 +2367,13 @@ describe('github agent tool catalog', () => {
               {
                 id: 'PRRT_kwDOExample',
                 isResolved: false,
+                isOutdated: true,
                 path: 'src/index.ts',
-                line: 42,
+                line: null,
+                originalLine: 42,
                 diffSide: 'RIGHT',
-                startLine: 40,
+                startLine: null,
+                originalStartLine: 40,
                 startDiffSide: 'RIGHT',
                 comments: {
                   nodes: [
@@ -2380,8 +2383,10 @@ describe('github agent tool catalog', () => {
                       body: 'Please handle this.',
                       author: {login: 'reviewer'},
                       path: 'src/index.ts',
-                      line: 42,
-                      startLine: 40,
+                      line: null,
+                      originalLine: 42,
+                      startLine: null,
+                      originalStartLine: 40,
                     },
                   ],
                 },
@@ -2427,7 +2432,23 @@ describe('github agent tool catalog', () => {
     expect(query).toContain('isResolved');
     expect(query).toContain('author');
     expect(threadFields).toEqual(
-      expect.arrayContaining(['path', 'line', 'diffSide', 'startLine', 'startDiffSide']),
+      expect.arrayContaining([
+        'isOutdated',
+        'path',
+        'line',
+        'originalLine',
+        'diffSide',
+        'startLine',
+        'originalStartLine',
+        'startDiffSide',
+      ]),
+    );
+    const commentFields = queryText
+      .slice(queryText.indexOf('comments(first: 100)'))
+      .split('\n')
+      .map((line) => line.trim());
+    expect(commentFields).toEqual(
+      expect.arrayContaining(['line', 'originalLine', 'startLine', 'originalStartLine']),
     );
     const selectedFields = queryText.split('\n').map((line) => line.trim());
     expect(selectedFields).not.toContain('side');
