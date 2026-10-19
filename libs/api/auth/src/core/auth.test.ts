@@ -292,7 +292,7 @@ describe('auth core', () => {
       invitationToken: `invite-${crypto.randomUUID()}`,
       workspaces,
       signupPolicy: {
-        isSignupAllowed: vi.fn().mockRejectedValue(new Error('policy unavailable')),
+        isSignupAllowed: vi.fn().mockResolvedValue({allowed: true}),
       },
     });
 
@@ -305,6 +305,46 @@ describe('auth core', () => {
       viaInvitation: true,
     });
     expect(await outboxEventsForUser(result.user.id, AUTH_USER_SIGNED_IN)).toHaveLength(0);
+  });
+
+  test('signup with an invitation applies the signup policy before creating a user', async () => {
+    const email = `signup-invitation-policy-${crypto.randomUUID()}@example.com`;
+    workspaces.preflightInvitationAcceptance.mockResolvedValueOnce(undefined);
+    const isSignupAllowed = vi.fn().mockResolvedValue({allowed: false, message: 'Closed beta'});
+
+    await expect(
+      signupWithInvitation({
+        email,
+        password: 'correct horse battery staple',
+        invitationToken: `invite-${crypto.randomUUID()}`,
+        workspaces,
+        signupPolicy: {isSignupAllowed},
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({name: 'SignupNotAllowedError', message: 'Closed beta'}),
+    );
+    expect(isSignupAllowed).toHaveBeenCalledWith({
+      email,
+      emailVerified: true,
+      source: 'invitation',
+    });
+    expect(await findUserByEmail({email})).toBeUndefined();
+  });
+
+  test('signup with an invitation does not issue a session when accept fails', async () => {
+    const email = `signup-invitation-accept-failed-${crypto.randomUUID()}@example.com`;
+    workspaces.preflightInvitationAcceptance.mockResolvedValueOnce(undefined);
+    workspaces.acceptInvitation.mockRejectedValueOnce(new Error('accept unavailable'));
+
+    await expect(
+      signupWithInvitation({
+        email,
+        password: 'correct horse battery staple',
+        invitationToken: `invite-${crypto.randomUUID()}`,
+        workspaces,
+      }),
+    ).rejects.toThrow('accept unavailable');
+    expect(await findUserByEmail({email})).toMatchObject({email});
   });
 
   test('provisionUser creates a verified user and writes a non-invitation signup event', async () => {

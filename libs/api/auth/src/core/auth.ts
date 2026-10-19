@@ -222,23 +222,6 @@ function invitationErrorFromKnownError(
   return new InvitationEmailMismatchError();
 }
 
-function invitationErrorMessage(
-  code:
-    | 'invitation-token-invalid'
-    | 'invitation-token-used'
-    | 'invitation-token-expired'
-    | 'invitation-email-mismatch'
-    | 'workspace-membership-cap-exceeded',
-): string {
-  if (code === 'invitation-token-invalid') return 'Invitation token is invalid';
-  if (code === 'invitation-token-used') return 'Invitation has already been accepted';
-  if (code === 'invitation-token-expired') return 'Invitation has expired';
-  if (code === 'workspace-membership-cap-exceeded') {
-    return 'This workspace is full. Ask an administrator to free a seat before trying again.';
-  }
-  return 'Signup email does not match the invitation';
-}
-
 export interface SignupParams {
   email: string;
   password: string;
@@ -361,6 +344,13 @@ export async function signupWithInvitation(
     throw invitationErrorFromKnownError(error, 'preflightInvitationAcceptance');
   }
 
+  await assertSignupAllowed({
+    signupPolicy: params.signupPolicy,
+    email: params.email,
+    emailVerified: true,
+    source: 'invitation',
+  });
+
   // Step 2: Create the user as verified. The invitation email is the proof of
   // ownership, and this avoids a second auth-table write just to mark verified.
   const existing = await findUserByEmail({email: params.email});
@@ -379,33 +369,19 @@ export async function signupWithInvitation(
   });
 
   // Step 3: Accept the invitation through the workspaces module boundary.
-  // This is intentionally not one database transaction with auth; treat it like
-  // calling another service. If it fails after user creation, return a verified
-  // signed-in user and an explicit retryable accept error.
-  let membership: SignupWithInvitationResult['membership'] = null;
-  let acceptError: SignupWithInvitationResult['acceptError'];
-  try {
-    const result = await params.workspaces.acceptInvitation({
-      token: params.invitationToken,
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-    });
-    membership = {
-      id: result.membership.id,
-      userId: result.membership.userId,
-      workspaceId: result.membership.workspaceId,
-    };
-  } catch (error) {
-    if (isInterModuleKnownError(workspacesInterModuleContract.methods.acceptInvitation, error)) {
-      acceptError = {code: error.code, message: invitationErrorMessage(error.code)};
-    } else {
-      acceptError = {
-        code: 'AcceptFailed',
-        message: 'Could not accept the invitation; please retry from the invite link.',
-      };
-    }
-  }
+  // This is intentionally not one database transaction with auth. A failed
+  // accept must not issue a session for the user row just created.
+  const accepted = await params.workspaces.acceptInvitation({
+    token: params.invitationToken,
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+  });
+  const membership = {
+    id: accepted.membership.id,
+    userId: accepted.membership.userId,
+    workspaceId: accepted.membership.workspaceId,
+  };
 
   // Step 4: Issue session. createSessionTokens reads memberships through the
   // workspaces module API, so a successful accept is reflected in the JWT.
@@ -415,9 +391,6 @@ export async function signupWithInvitation(
     false,
   );
 
-  if (acceptError) {
-    return {token, refreshToken, user, membership, acceptError, adminRole};
-  }
   return {token, refreshToken, user, membership, adminRole};
 }
 
