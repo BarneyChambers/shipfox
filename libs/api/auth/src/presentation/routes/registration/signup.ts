@@ -113,6 +113,7 @@ export function createSignupRoute(
         familyName: family_name,
         invitationToken: invitation_token,
         workspaces,
+        signupPolicy,
       });
       setRefreshTokenCookie(reply, result.refreshToken);
       reply.code(201);

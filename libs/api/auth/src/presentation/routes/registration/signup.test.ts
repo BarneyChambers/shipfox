@@ -245,7 +245,7 @@ describe('POST /auth/signup', () => {
     expect(capturedMail()).toHaveLength(0);
   });
 
-  test('returns partial success when invitation acceptance fails after user creation', async () => {
+  test('does not issue a session when invitation acceptance fails after user creation', async () => {
     const email = uniqueEmail('signup-invite-partial');
     const workspaceId = crypto.randomUUID();
     peekInvitationByRawTokenMock.mockResolvedValueOnce({
@@ -275,14 +275,8 @@ describe('POST /auth/signup', () => {
       },
     });
 
-    expect(res.statusCode).toBe(201);
-    expect(res.json().membership).toBeNull();
-    expect(res.json().accept_error).toEqual(
-      expect.objectContaining({
-        code: 'AcceptFailed',
-      }),
-    );
-    expect(res.json().token).toEqual(expect.any(String));
+    expect(res.statusCode).toBe(500);
+    expect(res.json().token).toBeUndefined();
   });
 
   test.each([
