@@ -180,10 +180,6 @@ function job(
 }
 
 describe('downloadGithubJobLogs', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it('returns the text of the download', async () => {
     vi.stubGlobal(
       'fetch',

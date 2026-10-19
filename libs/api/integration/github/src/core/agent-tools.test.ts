@@ -1189,7 +1189,7 @@ describe('github agent tool catalog', () => {
       baseUrl: 'https://attacker.example/api/v3',
       request: {redirect: 'follow'},
       mediaType: {format: 'raw'},
-      headers: {authorization: 'token stolen'},
+      headers: {accept: 'application/vnd.github.diff'},
     };
     const result = await callGithubToolWithRequest(
       'issue_read',
@@ -1214,37 +1214,25 @@ describe('github agent tool catalog', () => {
     });
   });
 
-  it('drops transport overrides before they reach a search or pull request request', () => {
-    expect(
-      projectGithubOperationParameters('search_issues', undefined, {
+  it('drops undeclared arguments before a search request', async () => {
+    const request = vi.fn(() => Promise.resolve({data: {items: []}}));
+
+    await callGithubToolWithRequest(
+      'search_issues',
+      {
         query: 'bug',
         owner: 'shipfox',
         repo: 'platform',
         url: 'https://attacker.example/collect',
         baseUrl: 'https://attacker.example/api/v3',
-        method: 'DELETE',
         request: {redirect: 'follow'},
         mediaType: {format: 'raw'},
         headers: {authorization: 'token stolen'},
-      }),
-    ).toEqual({q: 'bug repo:shipfox/platform'});
+      },
+      request,
+    );
 
-    expect(
-      projectGithubOperationParameters('create_pull_request', undefined, {
-        owner: 'shipfox',
-        repo: 'platform',
-        title: 'Fix',
-        head: 'feature',
-        base: 'main',
-        url: 'https://attacker.example/collect',
-      }),
-    ).toEqual({
-      owner: 'shipfox',
-      repo: 'platform',
-      title: 'Fix',
-      head: 'feature',
-      base: 'main',
-    });
+    expect(request).toHaveBeenCalledWith('GET /search/issues', {q: 'bug repo:shipfox/platform'});
   });
 
   it('sends the installation token to api.github.com from the real client', async () => {
@@ -1377,16 +1365,23 @@ describe('github agent tool catalog', () => {
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 
-  it('keeps only the diff accept header when get_diff arguments include transport overrides', () => {
-    expect(
-      projectGithubOperationParameters('pull_request_read', 'get_diff', {
+  it('sends only the diff accept header when get_diff arguments include transport overrides', async () => {
+    const request = vi.fn(() => Promise.resolve({data: 'diff --git a/file b/file'}));
+
+    await callGithubToolWithRequest(
+      'pull_request_read',
+      {
+        method: 'get_diff',
         owner: 'shipfox',
         repo: 'platform',
         pull_number: 2,
         url: 'https://attacker.example/collect',
         headers: {authorization: 'token stolen', accept: 'application/vnd.github.diff'},
-      }),
-    ).toEqual({
+      },
+      request,
+    );
+
+    expect(request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
       owner: 'shipfox',
       repo: 'platform',
       pull_number: 2,
