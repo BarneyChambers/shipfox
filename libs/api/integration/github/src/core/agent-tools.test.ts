@@ -1235,6 +1235,36 @@ describe('github agent tool catalog', () => {
     expect(request).toHaveBeenCalledWith('GET /search/issues', {q: 'bug repo:shipfox/platform'});
   });
 
+  it('drops undeclared arguments before a pull request write', async () => {
+    const request = vi.fn(() => Promise.resolve({data: {number: 3}}));
+
+    await callGithubToolWithRequest(
+      'create_pull_request',
+      {
+        owner: 'shipfox',
+        repo: 'platform',
+        title: 'Fix',
+        head: 'feature',
+        base: 'main',
+        url: 'https://attacker.example/collect',
+        baseUrl: 'https://attacker.example/api/v3',
+        request: {redirect: 'follow'},
+        mediaType: {format: 'raw'},
+        headers: {accept: 'application/vnd.github.diff'},
+      },
+      request,
+    );
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith('POST /repos/{owner}/{repo}/pulls', {
+      owner: 'shipfox',
+      repo: 'platform',
+      title: 'Fix',
+      head: 'feature',
+      base: 'main',
+    });
+  });
+
   it('sends the installation token to api.github.com from the real client', async () => {
     const seen: Array<{url: string; authorization: string | null; accept: string | null}> = [];
     vi.stubGlobal(
