@@ -19,6 +19,7 @@ import type {NodePgDatabase} from 'drizzle-orm/node-postgres';
 import {z} from 'zod';
 import {config} from '#config.js';
 import {handleJiraWebhook, isJiraInstallationUsable} from '#core/webhook.js';
+import {jiraWebhookDeliveryTokenMatches} from '#core/webhook-url.js';
 import {getJiraInstallationByConnectionId} from '#db/installations.js';
 
 const JIRA_PROVIDER = 'jira';
@@ -54,6 +55,10 @@ async function processJiraWebhookRequest(
 
   const rawBody = Buffer.from(decodeWebhookBody(request.body));
   const deliveryId = jiraDeliveryId(request, rawBody);
+  const connectionId = request.path_parameters.connection_id;
+  if (!jiraWebhookDeliveryTokenMatches(connectionId, request.raw_query_string)) {
+    return invalidAuthorization(deliveryId);
+  }
   const authorization = request.headers.authorization;
   if (!authorization) return invalidAuthorization(deliveryId);
 
@@ -89,7 +94,6 @@ async function processJiraWebhookRequest(
     return {outcome: 'discarded', reason: 'unsupported_event', deliveryId};
   }
 
-  const connectionId = request.path_parameters.connection_id;
   const connection = await options.getIntegrationConnectionById(connectionId);
   if (
     !connection ||
