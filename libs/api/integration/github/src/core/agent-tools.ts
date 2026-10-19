@@ -408,6 +408,42 @@ interface GithubToolOperation {
   kind: 'rest' | 'graphql';
 }
 
+const GITHUB_DIFF_ACCEPT = 'application/vnd.github.diff';
+
+// Octokit reads these keys off the parameters object as the HTTP call itself.
+// Tool arguments are spread into that object, so a caller-supplied url or
+// baseUrl would send the installation token to another host.
+function restParametersWithoutTransportOverrides(
+  parameters: Record<string, unknown>,
+): Record<string, unknown> {
+  const rest = {...parameters};
+  delete rest.url;
+  delete rest.baseUrl;
+  delete rest.method;
+  delete rest.request;
+  delete rest.mediaType;
+  const headers = rest.headers;
+  if (
+    !isRecord(headers) ||
+    headers.accept !== GITHUB_DIFF_ACCEPT ||
+    Object.keys(headers).length !== 1
+  ) {
+    delete rest.headers;
+  } else {
+    rest.headers = {accept: GITHUB_DIFF_ACCEPT};
+  }
+  return rest;
+}
+
+// Pending-review lookups pass request.signal so a hung page can be aborted.
+// Copy only that. redirect, fetch, and the other request options stay dropped.
+function octokitRequestParameters(parameters: Record<string, unknown>): Record<string, unknown> {
+  const safe = restParametersWithoutTransportOverrides(parameters);
+  const request = parameters.request;
+  if (!isRecord(request) || !(request.signal instanceof AbortSignal)) return safe;
+  return {...safe, request: {signal: request.signal}};
+}
+
 function createOctokitClient(token: string): GithubToolClient {
   const octokit = new Octokit({
     auth: token,
@@ -417,9 +453,10 @@ function createOctokitClient(token: string): GithubToolClient {
   return {
     request: async (route, parameters) => {
       if (!GITHUB_REDIRECT_ROUTES.has(route)) {
-        return await octokit.request(route, parameters);
+        return await octokit.request(route, octokitRequestParameters(parameters));
       }
 
+      const safe = restParametersWithoutTransportOverrides(parameters);
       const abortController = new AbortController();
       const timeout = setTimeout(
         () => abortController.abort(),
@@ -427,7 +464,7 @@ function createOctokitClient(token: string): GithubToolClient {
       );
       try {
         return await octokit.request(route, {
-          ...parameters,
+          ...safe,
           request: {
             redirect: 'manual',
             parseSuccessResponseBody: false,
@@ -702,6 +739,7 @@ export function projectGithubOperationParameters(
   method: string | undefined,
   args: Record<string, unknown>,
 ): Record<string, unknown> {
+  args = restParametersWithoutTransportOverrides(args);
   if (toolId === 'check_run_write') {
     return projectGithubCheckRunParameters(method, args);
   }
@@ -715,7 +753,7 @@ export function projectGithubOperationParameters(
     if (parameters.body === undefined) delete parameters.body;
   }
   if (toolId === 'pull_request_read' && method === 'get_diff') {
-    parameters.headers = {accept: 'application/vnd.github.diff'};
+    parameters.headers = {accept: GITHUB_DIFF_ACCEPT};
   }
   // GitHub answers a dispatch with no body unless asked, which leaves the caller no way to find
   // the run it started.
