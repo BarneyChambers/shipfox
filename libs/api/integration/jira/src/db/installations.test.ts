@@ -1,8 +1,10 @@
+import {sql} from 'drizzle-orm';
 import {
   JiraInstallationAlreadyLinkedError,
   JiraInstallationSiteMismatchError,
 } from '#core/errors.js';
 import {jiraInstallationFactory} from '#test/factories/jira-installation.js';
+import {db} from './db.js';
 import {
   deleteJiraInstallationByConnectionId,
   getJiraInstallationByCloudId,
@@ -189,6 +191,38 @@ describe('jira installations', () => {
       webhookExpiresAt: replacedExpiry,
       webhookDeliveryBound: true,
     });
+  });
+
+  it('matches a webhook expiry that Postgres stored with microseconds', async () => {
+    const input = createInstallationInput({
+      webhookIds: [123],
+      webhookExpiresAt: new Date('2026-08-05T00:00:00.000Z'),
+    });
+    await upsertJiraInstallation(input);
+    await updateJiraInstallationWebhook({
+      connectionId: input.connectionId,
+      webhookIds: [123],
+      webhookExpiresAt: new Date('2026-08-05T00:00:00.000Z'),
+      webhookDeliveryBound: false,
+    });
+    await db().execute(sql`
+      UPDATE integrations_jira_installations
+      SET webhook_expires_at = timestamptz '2026-08-05 00:00:00.123456+00'
+      WHERE connection_id = ${input.connectionId}
+    `);
+    const stored = await getJiraInstallationByConnectionId(input.connectionId);
+    if (!stored?.webhookExpiresAt) throw new Error('expected expiry');
+
+    const updated = await updateJiraInstallationWebhookIfUnchanged({
+      connectionId: input.connectionId,
+      expectedWebhookIds: stored.webhookIds,
+      expectedWebhookExpiresAt: stored.webhookExpiresAt,
+      webhookIds: stored.webhookIds,
+      webhookExpiresAt: null,
+      webhookDeliveryBound: false,
+    });
+
+    expect(updated?.webhookExpiresAt).toBeNull();
   });
 
   it('refuses to repoint a connection to a different Jira site', async () => {

@@ -302,7 +302,8 @@ export async function updateJiraInstallationWebhookIfUnchanged(
         sql`${jiraInstallations.webhookIds} <@ ${expectedWebhookIds}::jsonb`,
         params.expectedWebhookExpiresAt === null
           ? isNull(jiraInstallations.webhookExpiresAt)
-          : eq(jiraInstallations.webhookExpiresAt, params.expectedWebhookExpiresAt),
+          : // Date drops microseconds. The legacy migration stores now().
+            sql`date_trunc('milliseconds', ${jiraInstallations.webhookExpiresAt}) = date_trunc('milliseconds', ${params.expectedWebhookExpiresAt}::timestamptz)`,
         params.webhookDeliveryBound === false
           ? eq(jiraInstallations.webhookDeliveryBound, false)
           : undefined,
