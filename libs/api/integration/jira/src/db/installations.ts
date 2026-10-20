@@ -66,6 +66,7 @@ export interface UpsertJiraInstallationParams {
   scopes: string[];
   webhookIds?: number[] | undefined;
   webhookExpiresAt?: Date | null | undefined;
+  webhookDeliveryBound?: boolean | undefined;
   status: JiraInstallationStatus;
   tokenExpiresAt?: Date | null | undefined;
   refreshTokenLastUsedAt?: Date | undefined;
@@ -86,7 +87,7 @@ export interface UpdateJiraInstallationWebhookParams {
 }
 
 export interface UpdateJiraInstallationWebhookIfUnchangedParams
-  extends UpdateJiraInstallationWebhookParams {
+  extends Omit<UpdateJiraInstallationWebhookParams, 'webhookDeliveryBound'> {
   expectedWebhookIds: number[];
   expectedWebhookExpiresAt: Date | null;
 }
@@ -113,6 +114,9 @@ export async function upsertJiraInstallation(
         scopes: params.scopes,
         webhookIds: params.webhookIds ?? [],
         webhookExpiresAt: params.webhookExpiresAt ?? null,
+        ...(params.webhookDeliveryBound === undefined
+          ? {}
+          : {webhookDeliveryBound: params.webhookDeliveryBound}),
         status: params.status,
         tokenExpiresAt: params.tokenExpiresAt ?? null,
         refreshTokenLastUsedAt: params.refreshTokenLastUsedAt ?? now,
@@ -131,6 +135,9 @@ export async function upsertJiraInstallation(
           ...(params.webhookExpiresAt === undefined
             ? {}
             : {webhookExpiresAt: params.webhookExpiresAt}),
+          ...(params.webhookDeliveryBound === undefined
+            ? {}
+            : {webhookDeliveryBound: params.webhookDeliveryBound}),
           status: params.status,
           tokenExpiresAt: params.tokenExpiresAt ?? null,
           refreshTokenLastUsedAt: params.refreshTokenLastUsedAt ?? now,
@@ -246,7 +253,7 @@ export async function listJiraInstallationsDueForWebhookRenewal(
         ),
       ),
     )
-    .orderBy(asc(jiraInstallations.webhookExpiresAt))
+    .orderBy(asc(jiraInstallations.webhookExpiresAt), asc(jiraInstallations.updatedAt))
     .limit(params.limit ?? 100);
   return rows.map(toJiraInstallation);
 }

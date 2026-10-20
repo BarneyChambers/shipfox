@@ -2,6 +2,7 @@ import {
   JiraInstallationAlreadyLinkedError,
   JiraInstallationSiteMismatchError,
 } from '#core/errors.js';
+import {jiraInstallationFactory} from '#test/factories/jira-installation.js';
 import {
   deleteJiraInstallationByConnectionId,
   getJiraInstallationByCloudId,
@@ -290,6 +291,38 @@ describe('jira installations', () => {
     ).toMatchObject({webhookDeliveryBound: false});
   });
 
+  it('lists a dated legacy webhook before one whose expiry was cleared', async () => {
+    const dated = createInstallationInput({
+      webhookExpiresAt: new Date('2026-08-20T00:00:00.000Z'),
+    });
+    const cleared = createInstallationInput({
+      webhookExpiresAt: new Date('2026-08-01T00:00:00.000Z'),
+    });
+    await upsertJiraInstallation(dated);
+    await upsertJiraInstallation(cleared);
+    await updateJiraInstallationWebhook({
+      connectionId: dated.connectionId,
+      webhookIds: dated.webhookIds,
+      webhookExpiresAt: dated.webhookExpiresAt ?? null,
+      webhookDeliveryBound: false,
+    });
+    await updateJiraInstallationWebhook({
+      connectionId: cleared.connectionId,
+      webhookIds: cleared.webhookIds,
+      webhookExpiresAt: null,
+      webhookDeliveryBound: false,
+    });
+
+    const result = await listJiraInstallationsDueForWebhookRenewal({
+      before: new Date('2026-08-07T00:00:00.000Z'),
+    });
+    const connectionIds = result.map((installation) => installation.connectionId);
+
+    expect(connectionIds.indexOf(dated.connectionId)).toBeLessThan(
+      connectionIds.indexOf(cleared.connectionId),
+    );
+  });
+
   it('orders due installations by their latest refresh attempt', async () => {
     const refreshTokenLastUsedAt = new Date('1970-01-01T00:00:00.000Z');
     const attemptBase = Date.now();
@@ -375,5 +408,14 @@ describe('jira installations', () => {
     await expect(first).resolves.toBe('first');
     await expect(second).resolves.toBe('second');
     expect(secondFinished).toBe(true);
+  });
+
+  it('persists a legacy webhook flag from the installation factory', async () => {
+    const installation = await jiraInstallationFactory.create({webhookDeliveryBound: false});
+
+    expect(installation.webhookDeliveryBound).toBe(false);
+    expect(
+      (await getJiraInstallationByConnectionId(installation.connectionId))?.webhookDeliveryBound,
+    ).toBe(false);
   });
 });

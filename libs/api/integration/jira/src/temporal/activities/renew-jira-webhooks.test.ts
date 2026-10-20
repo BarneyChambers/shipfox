@@ -131,6 +131,39 @@ describe('Jira webhook renewal activity', () => {
     expect(result).toEqual({renewed: 0, reregistered: 1, skipped: 0, failed: 0});
   });
 
+  it('clears the expiry of an inactive legacy webhook so it leaves the front of the batch', async () => {
+    const connectionId = crypto.randomUUID();
+    const legacy = installation(connectionId, {webhookDeliveryBound: false});
+    const registerWebhook = vi.fn();
+    const updateWebhook = vi.fn().mockResolvedValue(undefined);
+    const activities = createJiraWebhookRenewalActivities({
+      tokenStore: {getAccessToken: vi.fn()},
+      jira: {
+        refreshDynamicWebhooks: vi.fn(),
+        registerDynamicWebhook: vi.fn(),
+        deleteDynamicWebhook: vi.fn(),
+      },
+      webhookUrlForConnection: (id) =>
+        `https://shipfox.example.test/webhooks/integrations/jira/${id}`,
+      resolveConnection: vi.fn().mockResolvedValue({lifecycleStatus: 'error'}),
+      listInstallations: vi.fn().mockResolvedValue([legacy]),
+      registerWebhook,
+      updateWebhook,
+      now: () => new Date('2026-08-01T00:00:00.000Z'),
+    });
+
+    const result = await activities.renewJiraWebhooksActivity();
+
+    expect(registerWebhook).not.toHaveBeenCalled();
+    expect(updateWebhook).toHaveBeenCalledWith({
+      connectionId,
+      webhookIds: legacy.webhookIds,
+      webhookExpiresAt: null,
+      webhookDeliveryBound: false,
+    });
+    expect(result).toEqual({renewed: 0, reregistered: 0, skipped: 1, failed: 0});
+  });
+
   it('re-registers and replaces webhook metadata when Jira no longer refreshes the ids', async () => {
     const connectionId = crypto.randomUUID();
     const due = installation(connectionId);

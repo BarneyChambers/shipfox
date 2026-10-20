@@ -12,6 +12,7 @@ export const jiraInstallationFactory = Factory.define<JiraInstallation>(({sequen
       scopes: installation.scopes,
       webhookIds: installation.webhookIds,
       webhookExpiresAt: installation.webhookExpiresAt,
+      webhookDeliveryBound: installation.webhookDeliveryBound,
       status: installation.status,
       tokenExpiresAt: installation.tokenExpiresAt,
       refreshTokenLastUsedAt: installation.refreshTokenLastUsedAt,
