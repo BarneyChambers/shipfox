@@ -485,6 +485,22 @@ describe('GithubSourceControlProvider', () => {
     await expect(result).rejects.toMatchObject({reason: 'content-too-large'});
   });
 
+  it('rejects an unsafe default branch before minting checkout credentials', async () => {
+    await createInstallation();
+    const github = githubClient({
+      getRepository: vi.fn(() => Promise.resolve({...CHECKOUT_REPOSITORY, defaultBranch: '-main'})),
+    });
+    const provider = new GithubSourceControlProvider(github);
+
+    await expect(
+      provider.createCheckoutSpec({
+        connection: connection(),
+        externalRepositoryId: 'github:42',
+      }),
+    ).rejects.toMatchObject({reason: 'ref-invalid'});
+    expect(github.createInstallationAccessToken).not.toHaveBeenCalled();
+  });
+
   it('rejects a checkout ref git would treat as an option', async () => {
     const provider = new GithubSourceControlProvider(githubClient());
 
