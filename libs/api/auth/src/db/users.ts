@@ -4,7 +4,7 @@ import {
   type AuthUserSignedUpEvent,
 } from '@shipfox/api-auth-dto';
 import {writeOutboxEvent} from '@shipfox/node-outbox';
-import {eq} from 'drizzle-orm';
+import {and, eq, isNull} from 'drizzle-orm';
 import type {User} from '#core/entities/user.js';
 import {EmailTakenError} from '#core/errors.js';
 import {db} from './db.js';
@@ -181,8 +181,13 @@ export async function updateUserPassword(
   return toUser(row);
 }
 
+function unfinishedInvitationSignup(userId: string) {
+  return and(eq(users.id, userId), isNull(users.hashedPassword), isNull(users.emailVerifiedAt));
+}
+
 export async function deleteUser(params: {userId: string}): Promise<void> {
-  await db().delete(users).where(eq(users.id, params.userId));
+  // A concurrent signup may have stored the password already.
+  await db().delete(users).where(unfinishedInvitationSignup(params.userId));
 }
 
 // Written here, not at insert, so a failed accept does not leave a signup event for a deleted user.
@@ -198,7 +203,7 @@ export async function finalizeInvitationSignup(params: {
         emailVerifiedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(users.id, params.userId))
+      .where(unfinishedInvitationSignup(params.userId))
       .returning();
     const row = rows[0];
     if (!row) return undefined;

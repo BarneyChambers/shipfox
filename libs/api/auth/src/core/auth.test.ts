@@ -40,7 +40,12 @@ import {authOutbox} from '#db/schema/outbox.js';
 import {passwordResets} from '#db/schema/password-resets.js';
 import {refreshTokens} from '#db/schema/refresh-tokens.js';
 import {users} from '#db/schema/users.js';
-import {createUser as createDbUser, findUserByEmail, findUserById} from '#db/users.js';
+import {
+  createUser as createDbUser,
+  finalizeInvitationSignup,
+  findUserByEmail,
+  findUserById,
+} from '#db/users.js';
 import {userFactory} from '#test/index.js';
 
 const testConfig = vi.hoisted(
@@ -424,6 +429,56 @@ describe('auth core', () => {
     expect(result.user.hashedPassword).toEqual(expect.any(String));
     expect(result.token).toEqual(expect.any(String));
     expect(await outboxEventsForUser(existing.id, AUTH_USER_SIGNED_UP)).toHaveLength(1);
+  });
+
+  test('signup with an invitation keeps a user another request already finished', async () => {
+    const email = `signup-invitation-finished-${crypto.randomUUID()}@example.com`;
+    workspaces.preflightInvitationAcceptance.mockResolvedValueOnce(undefined);
+    workspaces.acceptInvitation.mockImplementationOnce(async ({userId}: {userId: string}) => {
+      await finalizeInvitationSignup({userId, hashedPassword: 'winner-hash'});
+      throw new Error('accept unavailable');
+    });
+
+    await expect(
+      signupWithInvitation({
+        email,
+        password: 'correct horse battery staple',
+        invitationToken: `invite-${crypto.randomUUID()}`,
+        workspaces,
+      }),
+    ).rejects.toThrow('accept unavailable');
+
+    const kept = await findUserByEmail({email});
+    expect(kept?.hashedPassword).toBe('winner-hash');
+    expect(await outboxEventsTo(email, AUTH_USER_SIGNED_UP)).toHaveLength(1);
+  });
+
+  test('signup with an invitation reports a taken email when the password was already stored', async () => {
+    const email = `signup-invitation-lost-finalize-${crypto.randomUUID()}@example.com`;
+    workspaces.preflightInvitationAcceptance.mockResolvedValueOnce(undefined);
+    workspaces.acceptInvitation.mockImplementationOnce(async ({userId}: {userId: string}) => {
+      await finalizeInvitationSignup({userId, hashedPassword: 'winner-hash'});
+      return {
+        membership: {
+          id: crypto.randomUUID(),
+          userId,
+          workspaceId: crypto.randomUUID(),
+        },
+      };
+    });
+
+    await expect(
+      signupWithInvitation({
+        email,
+        password: 'correct horse battery staple',
+        invitationToken: `invite-${crypto.randomUUID()}`,
+        workspaces,
+      }),
+    ).rejects.toBeInstanceOf(EmailTakenError);
+
+    const kept = await findUserByEmail({email});
+    expect(kept?.hashedPassword).toBe('winner-hash');
+    expect(await outboxEventsTo(email, AUTH_USER_SIGNED_UP)).toHaveLength(1);
   });
 
   test('provisionUser creates a verified user and writes a non-invitation signup event', async () => {

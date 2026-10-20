@@ -266,6 +266,15 @@ describe('invitations core', () => {
     });
     expect(resumed.alreadyMember).toBe(true);
     expect(resumed.membership.workspaceId).toBe(workspace.id);
+
+    const someoneElse = userFactory.build();
+    const resumedBySomeoneElse = acceptWorkspaceInvitation({
+      token,
+      userId: someoneElse.userId,
+      email: invitee.email,
+      resumeAccepted: true,
+    });
+    await expect(resumedBySomeoneElse).rejects.toBeInstanceOf(TokenAlreadyUsedError);
   });
 
   test('previewInvitation treats a revoked invitation as invalid', async () => {

@@ -406,6 +406,8 @@ export async function signupWithInvitation(
 
   const verified = await finalizeInvitationSignup({userId: user.id, hashedPassword});
   if (!verified) {
+    const current = await findUserById({id: user.id});
+    if (current?.hashedPassword && current.emailVerifiedAt) throw new EmailTakenError(email);
     throw new Error('Invitation signup lost the user before setting a password');
   }
   const membership = {
