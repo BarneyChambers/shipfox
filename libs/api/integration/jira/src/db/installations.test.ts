@@ -268,6 +268,28 @@ describe('jira installations', () => {
     );
   });
 
+  it('lists a legacy webhook that still posts without the delivery token', async () => {
+    const legacy = createInstallationInput({
+      webhookExpiresAt: new Date('2026-08-20T00:00:00.000Z'),
+    });
+    await upsertJiraInstallation(legacy);
+    await updateJiraInstallationWebhook({
+      connectionId: legacy.connectionId,
+      webhookIds: legacy.webhookIds,
+      webhookExpiresAt: new Date('2026-08-20T00:00:00.000Z'),
+      webhookDeliveryBound: false,
+    });
+
+    const result = await listJiraInstallationsDueForWebhookRenewal({
+      before: new Date('2026-08-07T00:00:00.000Z'),
+    });
+
+    expect(result.map((installation) => installation.connectionId)).toContain(legacy.connectionId);
+    expect(
+      result.find((installation) => installation.connectionId === legacy.connectionId),
+    ).toMatchObject({webhookDeliveryBound: false});
+  });
+
   it('orders due installations by their latest refresh attempt', async () => {
     const refreshTokenLastUsedAt = new Date('1970-01-01T00:00:00.000Z');
     const attemptBase = Date.now();

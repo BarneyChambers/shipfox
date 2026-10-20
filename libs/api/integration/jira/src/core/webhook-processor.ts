@@ -57,7 +57,6 @@ async function processJiraWebhookRequest(
   const deliveryId = jiraDeliveryId(request, rawBody);
   const connectionId = request.path_parameters.connection_id;
   if (!jiraWebhookDeliveryTokenMatches(connectionId, request.raw_query_string)) {
-    logger().warn({deliveryId}, 'Jira webhook delivery token missing or mismatched');
     return invalidAuthorization(deliveryId);
   }
   const authorization = request.headers.authorization;

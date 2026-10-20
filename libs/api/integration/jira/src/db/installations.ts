@@ -1,6 +1,6 @@
 import {isUniqueViolation} from '@shipfox/node-drizzle';
 import {pgClient, withPostgresSession} from '@shipfox/node-postgres';
-import {and, asc, eq, isNotNull, isNull, lte, sql} from 'drizzle-orm';
+import {and, asc, eq, isNotNull, isNull, lte, or, sql} from 'drizzle-orm';
 import {
   JiraConnectionAlreadyLinkedError,
   JiraInstallationAlreadyLinkedError,
@@ -48,6 +48,7 @@ export interface JiraInstallation {
   scopes: string[];
   webhookIds: number[];
   webhookExpiresAt: Date | null;
+  webhookDeliveryBound: boolean;
   status: JiraInstallationStatus;
   tokenExpiresAt: Date | null;
   refreshTokenLastUsedAt: Date;
@@ -81,6 +82,7 @@ export interface UpdateJiraInstallationWebhookParams {
   connectionId: string;
   webhookIds: number[];
   webhookExpiresAt: Date | null;
+  webhookDeliveryBound?: boolean | undefined;
 }
 
 export interface UpdateJiraInstallationWebhookIfUnchangedParams
@@ -235,8 +237,13 @@ export async function listJiraInstallationsDueForWebhookRenewal(
     .where(
       and(
         eq(jiraInstallations.status, 'installed'),
-        isNotNull(jiraInstallations.webhookExpiresAt),
-        lte(jiraInstallations.webhookExpiresAt, params.before),
+        or(
+          eq(jiraInstallations.webhookDeliveryBound, false),
+          and(
+            isNotNull(jiraInstallations.webhookExpiresAt),
+            lte(jiraInstallations.webhookExpiresAt, params.before),
+          ),
+        ),
       ),
     )
     .orderBy(asc(jiraInstallations.webhookExpiresAt))
@@ -255,6 +262,9 @@ export async function updateJiraInstallationWebhook(
       webhookIds: params.webhookIds,
       webhookExpiresAt: params.webhookExpiresAt,
       updatedAt: new Date(),
+      ...(params.webhookDeliveryBound === undefined
+        ? {}
+        : {webhookDeliveryBound: params.webhookDeliveryBound}),
     })
     .where(eq(jiraInstallations.connectionId, params.connectionId))
     .returning();
