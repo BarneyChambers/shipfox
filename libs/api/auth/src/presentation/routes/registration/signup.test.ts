@@ -279,6 +279,34 @@ describe('POST /auth/signup', () => {
     expect(res.json().token).toBeUndefined();
   });
 
+  test('maps a full workspace on accept to 409 and does not issue a session', async () => {
+    const email = uniqueEmail('signup-invite-cap');
+    peekInvitationByRawTokenMock.mockResolvedValueOnce(undefined);
+    acceptWorkspaceInvitationMock.mockRejectedValueOnce(
+      createInterModuleKnownError(
+        workspacesInterModuleContract.methods.acceptInvitation,
+        'workspace-membership-cap-exceeded',
+        {cap: 5},
+      ),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: {
+        email,
+        password,
+        name: 'Invitee',
+        invitation_token: `invite-${crypto.randomUUID()}`,
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('workspace-membership-cap-exceeded');
+    expect(res.json().details).toEqual({cap: 5});
+    expect(res.json().token).toBeUndefined();
+  });
+
   test.each([
     {name: 'invalid token', expectedCode: 'invitation-token-invalid' as const, expectedStatus: 410},
     {

@@ -12,6 +12,7 @@ import {
 import {isInterModuleKnownError} from '@shipfox/inter-module';
 import {userAccessTokenKey} from '@shipfox/node-auth-root-key';
 import {durationToSeconds} from '@shipfox/node-jwt';
+import {logger} from '@shipfox/node-opentelemetry';
 import {generateOpaqueToken, hashOpaqueToken} from '@shipfox/node-tokens';
 import {config} from '#config.js';
 import {consumePasswordReset, createPasswordReset} from '#db/password-resets.js';
@@ -27,6 +28,7 @@ import {
 import {
   createUser as createDbUser,
   deleteUser,
+  finalizeInvitationSignup,
   findUserByEmail,
   findUserById,
   markEmailVerified,
@@ -50,6 +52,7 @@ import {
   TokenExpiredError,
   TokenInvalidError,
   UserNotFoundError,
+  WorkspaceMembershipCapExceededError,
 } from './errors.js';
 import {signUserToken, type TokenMembership, verifyUserToken} from './jwt.js';
 import {hashPassword, verifyPassword} from './password.js';
@@ -220,7 +223,16 @@ function invitationErrorFromKnownError(
     return new TokenInvalidError('Invitation token is invalid');
   if (error.code === 'invitation-token-used') return new TokenAlreadyUsedError();
   if (error.code === 'invitation-token-expired') return new TokenExpiredError();
-  return new InvitationEmailMismatchError();
+  if (error.code === 'invitation-email-mismatch') return new InvitationEmailMismatchError();
+  if (error.code === 'workspace-membership-cap-exceeded') {
+    return new WorkspaceMembershipCapExceededError(error.details.cap);
+  }
+  return error as Error;
+}
+
+function isOpenInvitationSignup(user: User): boolean {
+  // Login refuses an unverified user, and password reset refuses a user with no password.
+  return user.status === 'active' && user.hashedPassword === null && user.emailVerifiedAt === null;
 }
 
 export interface SignupParams {
@@ -327,49 +339,50 @@ export interface SignupWithInvitationParams extends SignupParams {
 
 export interface SignupWithInvitationResult extends LoginResult {
   membership: {id: string; userId: string; workspaceId: string} | null;
-  acceptError?: {code: string; message: string};
 }
 
 export async function signupWithInvitation(
   params: SignupWithInvitationParams,
 ): Promise<SignupWithInvitationResult> {
-  // Step 1: Pre-validate the invitation BEFORE any user write so an invalid
-  // token never produces an orphan user. Re-validation happens again inside
-  // acceptWorkspaceInvitation (race-safe) after the user is created.
-  try {
-    await params.workspaces.preflightInvitationAcceptance({
-      token: params.invitationToken,
-      email: params.email,
+  const email = emailSchema.parse(params.email);
+  const existing = await findUserByEmail({email});
+  if (existing && !isOpenInvitationSignup(existing)) {
+    throw new EmailTakenError(email);
+  }
+
+  let user = existing;
+  let created = false;
+  if (!user) {
+    // Preflight before any user write so an invalid token never produces an orphan.
+    // Accept checks the token again, including a retry after this process died.
+    try {
+      await params.workspaces.preflightInvitationAcceptance({
+        token: params.invitationToken,
+        email,
+      });
+    } catch (error) {
+      throw invitationErrorFromKnownError(error, 'preflightInvitationAcceptance');
+    }
+
+    await assertSignupAllowed({
+      signupPolicy: params.signupPolicy,
+      email,
+      emailVerified: true,
+      source: 'invitation',
     });
-  } catch (error) {
-    throw invitationErrorFromKnownError(error, 'preflightInvitationAcceptance');
+
+    user = await createDbUser({
+      email,
+      hashedPassword: null,
+      name: params.name ?? null,
+      givenName: params.givenName ?? null,
+      familyName: params.familyName ?? null,
+      emailVerifiedAt: null,
+    });
+    created = true;
   }
 
-  await assertSignupAllowed({
-    signupPolicy: params.signupPolicy,
-    email: params.email,
-    emailVerified: true,
-    source: 'invitation',
-  });
-
-  // The row stays unverified and has no password until accept succeeds.
-  // Login refuses an unverified user, and password reset refuses a user with
-  // no password. A failed accept deletes the row so neither path can mint a session.
-  const existing = await findUserByEmail({email: params.email});
-  if (existing) {
-    throw new EmailTakenError(params.email);
-  }
   const hashedPassword = await hashPassword({password: params.password});
-  const user = await createDbUser({
-    email: params.email,
-    hashedPassword: null,
-    name: params.name ?? null,
-    givenName: params.givenName ?? null,
-    familyName: params.familyName ?? null,
-    emailVerifiedAt: null,
-    signedUp: {viaInvitation: true},
-  });
-
   let accepted: Awaited<ReturnType<SignupWithInvitationParams['workspaces']['acceptInvitation']>>;
   try {
     accepted = await params.workspaces.acceptInvitation({
@@ -379,17 +392,21 @@ export async function signupWithInvitation(
       name: user.name,
     });
   } catch (error) {
-    await deleteUser({userId: user.id}).catch(() => undefined);
-    throw error;
+    if (created) {
+      const userId = user.id;
+      await deleteUser({userId}).catch((cleanupError: unknown) => {
+        logger().warn(
+          {err: cleanupError, userId},
+          'Failed to delete the user after invitation acceptance failed',
+        );
+      });
+    }
+    throw invitationErrorFromKnownError(error, 'acceptInvitation');
   }
 
-  const withPassword = await updateUserPassword({userId: user.id, hashedPassword});
-  if (!withPassword) {
-    throw new Error('Invitation signup lost the user before setting a password');
-  }
-  const verified = await markEmailVerified({userId: user.id});
+  const verified = await finalizeInvitationSignup({userId: user.id, hashedPassword});
   if (!verified) {
-    throw new Error('Invitation signup lost the user before verifying the email');
+    throw new Error('Invitation signup lost the user before setting a password');
   }
   const membership = {
     id: accepted.membership.id,

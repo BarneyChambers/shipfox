@@ -185,6 +185,33 @@ export async function deleteUser(params: {userId: string}): Promise<void> {
   await db().delete(users).where(eq(users.id, params.userId));
 }
 
+// Written here, not at insert, so a failed accept does not leave a signup event for a deleted user.
+export async function finalizeInvitationSignup(params: {
+  userId: string;
+  hashedPassword: string;
+}): Promise<User | undefined> {
+  return await db().transaction(async (tx) => {
+    const rows = await tx
+      .update(users)
+      .set({
+        hashedPassword: params.hashedPassword,
+        emailVerifiedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, params.userId))
+      .returning();
+    const row = rows[0];
+    if (!row) return undefined;
+
+    const user = toUser(row);
+    await writeOutboxEvent<AuthEventMap>(tx, authOutbox, {
+      type: AUTH_USER_SIGNED_UP,
+      payload: toSignedUpPayload(user, true),
+    });
+    return user;
+  });
+}
+
 export async function markEmailVerified(params: {userId: string}): Promise<User | undefined> {
   const rows = await db()
     .update(users)

@@ -257,6 +257,15 @@ describe('invitations core', () => {
 
     const reused = acceptWorkspaceInvitation({token, userId: invitee.userId, email: invitee.email});
     await expect(reused).rejects.toBeInstanceOf(TokenAlreadyUsedError);
+
+    const resumed = await acceptWorkspaceInvitation({
+      token,
+      userId: invitee.userId,
+      email: invitee.email,
+      resumeAccepted: true,
+    });
+    expect(resumed.alreadyMember).toBe(true);
+    expect(resumed.membership.workspaceId).toBe(workspace.id);
   });
 
   test('previewInvitation treats a revoked invitation as invalid', async () => {

@@ -135,6 +135,8 @@ export async function acceptWorkspaceInvitation(params: {
   userId: string;
   email: string;
   name?: string | null | undefined;
+  // Signup sets this so a retry can finish after accept committed and the process died.
+  resumeAccepted?: boolean;
 }): Promise<AcceptedWorkspaceInvitation> {
   const result = await reconcileWorkspaceInvitationAcceptance({
     token: params.token,
@@ -147,6 +149,13 @@ export async function acceptWorkspaceInvitation(params: {
       invitation: result.invitation,
       membership: result.membership,
       alreadyMember: result.alreadyMember,
+    };
+  }
+  if (result.status === 'already_accepted' && params.resumeAccepted) {
+    return {
+      invitation: result.invitation,
+      membership: result.membership,
+      alreadyMember: true,
     };
   }
   if (result.status === 'already_accepted' || result.status === 'consumed_by_another_user') {

@@ -98,7 +98,7 @@ export function createWorkspacesInterModulePresentation(): InterModulePresentati
     },
     acceptInvitation: async (input) => {
       try {
-        const result = await acceptWorkspaceInvitation(input);
+        const result = await acceptWorkspaceInvitation({...input, resumeAccepted: true});
         return {
           membership: {
             id: result.membership.id,
