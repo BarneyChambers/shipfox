@@ -90,6 +90,7 @@ export interface UpdateJiraInstallationWebhookIfUnchangedParams
   extends Omit<UpdateJiraInstallationWebhookParams, 'webhookDeliveryBound'> {
   expectedWebhookIds: number[];
   expectedWebhookExpiresAt: Date | null;
+  webhookDeliveryBound?: false | undefined;
 }
 
 type JiraDb = ReturnType<typeof db>;
@@ -290,6 +291,9 @@ export async function updateJiraInstallationWebhookIfUnchanged(
       webhookIds: params.webhookIds,
       webhookExpiresAt: params.webhookExpiresAt,
       updatedAt: new Date(),
+      ...(params.webhookDeliveryBound === undefined
+        ? {}
+        : {webhookDeliveryBound: params.webhookDeliveryBound}),
     })
     .where(
       and(
@@ -299,6 +303,9 @@ export async function updateJiraInstallationWebhookIfUnchanged(
         params.expectedWebhookExpiresAt === null
           ? isNull(jiraInstallations.webhookExpiresAt)
           : eq(jiraInstallations.webhookExpiresAt, params.expectedWebhookExpiresAt),
+        params.webhookDeliveryBound === false
+          ? eq(jiraInstallations.webhookDeliveryBound, false)
+          : undefined,
       ),
     )
     .returning();

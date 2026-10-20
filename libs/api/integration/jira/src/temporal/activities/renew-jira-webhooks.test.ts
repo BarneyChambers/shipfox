@@ -135,7 +135,7 @@ describe('Jira webhook renewal activity', () => {
     const connectionId = crypto.randomUUID();
     const legacy = installation(connectionId, {webhookDeliveryBound: false});
     const registerWebhook = vi.fn();
-    const updateWebhook = vi.fn().mockResolvedValue(undefined);
+    const updateInstallation = vi.fn().mockResolvedValue(undefined);
     const activities = createJiraWebhookRenewalActivities({
       tokenStore: {getAccessToken: vi.fn()},
       jira: {
@@ -148,17 +148,19 @@ describe('Jira webhook renewal activity', () => {
       resolveConnection: vi.fn().mockResolvedValue({lifecycleStatus: 'error'}),
       listInstallations: vi.fn().mockResolvedValue([legacy]),
       registerWebhook,
-      updateWebhook,
+      updateInstallation,
       now: () => new Date('2026-08-01T00:00:00.000Z'),
     });
 
     const result = await activities.renewJiraWebhooksActivity();
 
     expect(registerWebhook).not.toHaveBeenCalled();
-    expect(updateWebhook).toHaveBeenCalledWith({
+    expect(updateInstallation).toHaveBeenCalledWith({
       connectionId,
       webhookIds: legacy.webhookIds,
       webhookExpiresAt: null,
+      expectedWebhookIds: legacy.webhookIds,
+      expectedWebhookExpiresAt: legacy.webhookExpiresAt,
       webhookDeliveryBound: false,
     });
     expect(result).toEqual({renewed: 0, reregistered: 0, skipped: 1, failed: 0});

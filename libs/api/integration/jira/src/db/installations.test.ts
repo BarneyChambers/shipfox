@@ -146,6 +146,51 @@ describe('jira installations', () => {
     ).resolves.toMatchObject({webhookIds: [789]});
   });
 
+  it('does not clear a webhook a reconnect already replaced', async () => {
+    const expiry = new Date('2026-08-05T00:00:00.000Z');
+    const replacedExpiry = new Date('2026-09-01T00:00:00.000Z');
+    const input = createInstallationInput({webhookIds: [123], webhookExpiresAt: expiry});
+    await upsertJiraInstallation(input);
+    await updateJiraInstallationWebhook({
+      connectionId: input.connectionId,
+      webhookIds: [123],
+      webhookExpiresAt: expiry,
+      webhookDeliveryBound: false,
+    });
+    await updateJiraInstallationWebhook({
+      connectionId: input.connectionId,
+      webhookIds: [456],
+      webhookExpiresAt: replacedExpiry,
+      webhookDeliveryBound: true,
+    });
+
+    await expect(
+      updateJiraInstallationWebhookIfUnchanged({
+        connectionId: input.connectionId,
+        expectedWebhookIds: [123],
+        expectedWebhookExpiresAt: expiry,
+        webhookIds: [123],
+        webhookExpiresAt: null,
+        webhookDeliveryBound: false,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      updateJiraInstallationWebhookIfUnchanged({
+        connectionId: input.connectionId,
+        expectedWebhookIds: [456],
+        expectedWebhookExpiresAt: replacedExpiry,
+        webhookIds: [456],
+        webhookExpiresAt: null,
+        webhookDeliveryBound: false,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(getJiraInstallationByConnectionId(input.connectionId)).resolves.toMatchObject({
+      webhookIds: [456],
+      webhookExpiresAt: replacedExpiry,
+      webhookDeliveryBound: true,
+    });
+  });
+
   it('refuses to repoint a connection to a different Jira site', async () => {
     const first = createInstallationInput();
     await upsertJiraInstallation(first);
@@ -318,6 +363,9 @@ describe('jira installations', () => {
     });
     const connectionIds = result.map((installation) => installation.connectionId);
 
+    expect(connectionIds).toEqual(
+      expect.arrayContaining([dated.connectionId, cleared.connectionId]),
+    );
     expect(connectionIds.indexOf(dated.connectionId)).toBeLessThan(
       connectionIds.indexOf(cleared.connectionId),
     );

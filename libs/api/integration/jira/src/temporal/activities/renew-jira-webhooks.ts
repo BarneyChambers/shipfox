@@ -6,7 +6,6 @@ import {registerJiraWebhook} from '#core/webhook-registration.js';
 import {
   type JiraInstallation,
   listJiraInstallationsDueForWebhookRenewal,
-  updateJiraInstallationWebhook,
   updateJiraInstallationWebhookIfUnchanged,
 } from '#db/installations.js';
 import {
@@ -37,7 +36,6 @@ export interface CreateJiraWebhookRenewalActivitiesOptions {
   ): Promise<Pick<IntegrationConnection, 'lifecycleStatus'> | undefined>;
   listInstallations?: typeof listJiraInstallationsDueForWebhookRenewal | undefined;
   updateInstallation?: typeof updateJiraInstallationWebhookIfUnchanged | undefined;
-  updateWebhook?: typeof updateJiraInstallationWebhook | undefined;
   registerWebhook?: typeof registerJiraWebhook | undefined;
   now?: (() => Date) | undefined;
   heartbeat?: (() => void) | undefined;
@@ -48,7 +46,6 @@ export function createJiraWebhookRenewalActivities(
 ) {
   const listInstallations = options.listInstallations ?? listJiraInstallationsDueForWebhookRenewal;
   const updateInstallation = options.updateInstallation ?? updateJiraInstallationWebhookIfUnchanged;
-  const updateWebhook = options.updateWebhook ?? updateJiraInstallationWebhook;
   const registerWebhook = options.registerWebhook ?? registerJiraWebhook;
   const now = options.now ?? (() => new Date());
   const heartbeat = options.heartbeat ?? (() => undefined);
@@ -75,7 +72,6 @@ export function createJiraWebhookRenewalActivities(
             renewalDeadline,
             now,
             updateInstallation,
-            updateWebhook,
             registerWebhook,
           });
           if (outcome === 'renewed') renewed += 1;
@@ -106,7 +102,6 @@ async function renewJiraWebhook(params: {
   renewalDeadline: Date;
   now: () => Date;
   updateInstallation: typeof updateJiraInstallationWebhookIfUnchanged;
-  updateWebhook: typeof updateJiraInstallationWebhook;
   registerWebhook: typeof registerJiraWebhook;
 }): Promise<JiraWebhookRenewalOutcome> {
   // refreshDynamicWebhooks keeps the callback Jira already stored, so only a
@@ -118,11 +113,13 @@ async function renewJiraWebhook(params: {
   const connection = await params.options.resolveConnection(params.installation.connectionId);
   if (connection?.lifecycleStatus !== 'active') {
     if (replaceLegacyUrl) {
-      // Clear the expiry so this row sorts after dated ones and cannot fill the batch forever.
-      await params.updateWebhook({
+      // Only the row we read. A reconnect may have stored a new webhook since the list.
+      await params.updateInstallation({
         connectionId: params.installation.connectionId,
         webhookIds: params.installation.webhookIds,
         webhookExpiresAt: null,
+        expectedWebhookIds: params.installation.webhookIds,
+        expectedWebhookExpiresAt: params.installation.webhookExpiresAt,
         webhookDeliveryBound: false,
       });
     }
