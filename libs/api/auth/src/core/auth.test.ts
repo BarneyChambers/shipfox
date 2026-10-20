@@ -344,7 +344,7 @@ describe('auth core', () => {
         workspaces,
       }),
     ).rejects.toThrow('accept unavailable');
-    expect(await findUserByEmail({email})).toMatchObject({email});
+    expect(await findUserByEmail({email})).toBeUndefined();
   });
 
   test('provisionUser creates a verified user and writes a non-invitation signup event', async () => {

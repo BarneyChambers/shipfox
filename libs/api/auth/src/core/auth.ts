@@ -26,6 +26,7 @@ import {
 } from '#db/refresh-tokens.js';
 import {
   createUser as createDbUser,
+  deleteUser,
   findUserByEmail,
   findUserById,
   markEmailVerified,
@@ -351,8 +352,9 @@ export async function signupWithInvitation(
     source: 'invitation',
   });
 
-  // Step 2: Create the user as verified. The invitation email is the proof of
-  // ownership, and this avoids a second auth-table write just to mark verified.
+  // The row stays unverified and has no password until accept succeeds.
+  // Login refuses an unverified user, and password reset refuses a user with
+  // no password. A failed accept deletes the row so neither path can mint a session.
   const existing = await findUserByEmail({email: params.email});
   if (existing) {
     throw new EmailTakenError(params.email);
@@ -360,38 +362,50 @@ export async function signupWithInvitation(
   const hashedPassword = await hashPassword({password: params.password});
   const user = await createDbUser({
     email: params.email,
-    hashedPassword,
+    hashedPassword: null,
     name: params.name ?? null,
     givenName: params.givenName ?? null,
     familyName: params.familyName ?? null,
-    emailVerifiedAt: new Date(),
+    emailVerifiedAt: null,
     signedUp: {viaInvitation: true},
   });
 
-  // Step 3: Accept the invitation through the workspaces module boundary.
-  // This is intentionally not one database transaction with auth. A failed
-  // accept must not issue a session for the user row just created.
-  const accepted = await params.workspaces.acceptInvitation({
-    token: params.invitationToken,
-    userId: user.id,
-    email: user.email,
-    name: user.name,
-  });
+  let accepted: Awaited<ReturnType<SignupWithInvitationParams['workspaces']['acceptInvitation']>>;
+  try {
+    accepted = await params.workspaces.acceptInvitation({
+      token: params.invitationToken,
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+    });
+  } catch (error) {
+    await deleteUser({userId: user.id}).catch(() => undefined);
+    throw error;
+  }
+
+  const withPassword = await updateUserPassword({userId: user.id, hashedPassword});
+  if (!withPassword) {
+    throw new Error('Invitation signup lost the user before setting a password');
+  }
+  const verified = await markEmailVerified({userId: user.id});
+  if (!verified) {
+    throw new Error('Invitation signup lost the user before verifying the email');
+  }
   const membership = {
     id: accepted.membership.id,
     userId: accepted.membership.userId,
     workspaceId: accepted.membership.workspaceId,
   };
 
-  // Step 4: Issue session. createSessionTokens reads memberships through the
-  // workspaces module API, so a successful accept is reflected in the JWT.
+  // createSessionTokens reads memberships through the workspaces module API,
+  // so a successful accept is reflected in the JWT.
   const {token, refreshToken, adminRole} = await createSessionTokens(
-    user,
+    verified,
     params.workspaces,
     false,
   );
 
-  return {token, refreshToken, user, membership, adminRole};
+  return {token, refreshToken, user: verified, membership, adminRole};
 }
 
 export interface CreateUserParams extends SignupParams {

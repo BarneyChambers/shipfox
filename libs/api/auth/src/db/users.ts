@@ -181,6 +181,10 @@ export async function updateUserPassword(
   return toUser(row);
 }
 
+export async function deleteUser(params: {userId: string}): Promise<void> {
+  await db().delete(users).where(eq(users.id, params.userId));
+}
+
 export async function markEmailVerified(params: {userId: string}): Promise<User | undefined> {
   const rows = await db()
     .update(users)
