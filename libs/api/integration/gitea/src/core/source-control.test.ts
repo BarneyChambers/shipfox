@@ -600,7 +600,7 @@ describe('GiteaSourceControlProvider', () => {
       provider.createCheckoutSpec({
         connection: connection(),
         externalRepositoryId: 'gitea:shipfox/platform',
-        ref: '--upload-pack=touch /tmp/sf-upload-pack-marker',
+        ref: '--upload-pack=touch',
       }),
     ).rejects.toMatchObject({reason: 'ref-invalid'});
   });
