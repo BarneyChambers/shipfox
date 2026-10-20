@@ -556,7 +556,7 @@ export function parseProviderRepositoryId(
  * A leading dash is a git option (`git fetch origin --upload-pack=...`).
  */
 export function isSafeCheckoutRef(ref: string): boolean {
-  if (!ref || ref.startsWith('-')) return false;
+  if (!ref || ref.startsWith('-') || ref.startsWith('+')) return false;
   if (ref.includes('/')) return isValidGitRefName(ref);
   return isValidGitRefName(`refs/heads/${ref}`);
 }
