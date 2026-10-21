@@ -120,6 +120,7 @@ function createHarness(overrides: {published?: boolean; deduplicate?: boolean} =
     cloudId: id === connectionId ? cloudId : `cloud-${id}`,
     authorizingAccountId: 'account-1',
     webhookIds: [42],
+    webhookDeliveryBound: true,
     status: 'installed',
   }));
   const processor = createJiraWebhookProcessor({
@@ -198,6 +199,26 @@ describe('Jira webhook processor', () => {
     expect(missingToken).toMatchObject({outcome: 'discarded', reason: 'invalid_signature'});
     expect(otherConnectionToken).toMatchObject({outcome: 'discarded', reason: 'invalid_signature'});
     expect(harness.publishIntegrationEventReceived).not.toHaveBeenCalled();
+  });
+
+  it('accepts a delivery without the token while the webhook still uses the legacy URL', async () => {
+    const harness = createHarness();
+    harness.getJiraInstallationByConnectionId.mockResolvedValue({
+      connectionId,
+      cloudId,
+      authorizingAccountId: 'account-1',
+      webhookIds: [42],
+      webhookDeliveryBound: false,
+      status: 'installed',
+    });
+    const token = await signedAuthorization();
+
+    const result = await harness.processor.process(
+      createRequest(createPayload(), `Bearer ${token}`, receivedAt, connectionId, undefined, ''),
+    );
+
+    expect(result).toMatchObject({outcome: 'processed'});
+    expect(harness.publishIntegrationEventReceived).toHaveBeenCalledOnce();
   });
 
   it('rejects tokens that are expired at Jira receipt time or use another algorithm', async () => {
