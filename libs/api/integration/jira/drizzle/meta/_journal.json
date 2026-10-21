@@ -20,14 +20,7 @@
       "idx": 2,
       "version": "7",
       "when": 1792500000000,
-      "tag": "0002_jira-webhook-delivery-reregister",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1792600000000,
-      "tag": "0003_jira-webhook-delivery-bound",
+      "tag": "0002_jira-webhook-delivery-bound",
       "breakpoints": true
     }
   ]
