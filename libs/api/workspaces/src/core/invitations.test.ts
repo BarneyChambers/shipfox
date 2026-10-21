@@ -1,15 +1,11 @@
 import {WORKSPACES_INVITATION_SEND_REQUESTED} from '@shipfox/api-workspaces-dto';
-import {workspacesInterModuleContract} from '@shipfox/api-workspaces-dto/inter-module';
-import {isInterModuleKnownError} from '@shipfox/inter-module';
 import type {Mailer, MailMessage} from '@shipfox/node-mailer';
-import {createInMemoryInterModuleTransport} from '@shipfox/node-module/inter-module';
 import {hashOpaqueToken} from '@shipfox/node-tokens';
 import {and, desc, eq, sql} from 'drizzle-orm';
 import {db} from '#db/db.js';
 import {findInvitationByToken, revokeInvitation} from '#db/invitations.js';
 import {createMembership} from '#db/memberships.js';
 import {workspacesOutbox} from '#db/schema/outbox.js';
-import {createWorkspacesInterModulePresentation} from '#presentation/inter-module.js';
 import {userFactory, workspaceFactory} from '#test/index.js';
 import {
   InvitationEmailMismatchError,
@@ -257,24 +253,6 @@ describe('invitations core', () => {
 
     const reused = acceptWorkspaceInvitation({token, userId: invitee.userId, email: invitee.email});
     await expect(reused).rejects.toBeInstanceOf(TokenAlreadyUsedError);
-
-    const resumed = await acceptWorkspaceInvitation({
-      token,
-      userId: invitee.userId,
-      email: invitee.email,
-      resumeAccepted: true,
-    });
-    expect(resumed.alreadyMember).toBe(true);
-    expect(resumed.membership.workspaceId).toBe(workspace.id);
-
-    const someoneElse = userFactory.build();
-    const resumedBySomeoneElse = acceptWorkspaceInvitation({
-      token,
-      userId: someoneElse.userId,
-      email: invitee.email,
-      resumeAccepted: true,
-    });
-    await expect(resumedBySomeoneElse).rejects.toBeInstanceOf(TokenAlreadyUsedError);
   });
 
   test('previewInvitation treats a revoked invitation as invalid', async () => {
@@ -302,41 +280,5 @@ describe('invitations core', () => {
     const result = await previewInvitation({token});
 
     expect(result).toEqual({status: 'invalid'});
-  });
-
-  test('preflight rejects a revoked invitation', async () => {
-    const inviter = userFactory.build();
-    const workspace = await workspaceFactory.create();
-    await createMembership({
-      userId: inviter.userId,
-      userEmail: inviter.email,
-      userName: inviter.name,
-      workspaceId: workspace.id,
-    });
-    const email = `revoked-preflight-${crypto.randomUUID()}@example.com`;
-    await createWorkspaceInvitation({
-      workspaceId: workspace.id,
-      email,
-      invitedByUserId: inviter.userId,
-      invitedByMemberships: [{workspaceId: workspace.id, role: 'admin', workspaceStatus: 'active'}],
-    });
-    const payload = await latestInvitationPayload(email);
-    const token = extractToken(payload.inviteLink);
-    const invitation = await findInvitationByToken({hashedToken: hashOpaqueToken(token)});
-    if (!invitation) throw new Error('Expected stored invitation');
-    await revokeInvitation({invitationId: invitation.id});
-
-    const transport = createInMemoryInterModuleTransport();
-    const client = transport.createClient(workspacesInterModuleContract);
-    transport.register(createWorkspacesInterModulePresentation());
-    transport.seal();
-
-    const preflight = client.preflightInvitationAcceptance({token, email});
-    await expect(preflight).rejects.toSatisfy((error: unknown) =>
-      isInterModuleKnownError(
-        workspacesInterModuleContract.methods.preflightInvitationAcceptance,
-        error,
-      ),
-    );
   });
 });

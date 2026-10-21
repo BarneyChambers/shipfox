@@ -7,8 +7,6 @@ import {db} from './db.js';
 import {authOutbox} from './schema/outbox.js';
 import {
   createUser,
-  deleteUser,
-  finalizeInvitationSignup,
   findUserByEmail,
   findUserById,
   markEmailVerified,
@@ -140,48 +138,6 @@ describe('users db', () => {
     const verified = await markEmailVerified({userId: user.id});
 
     expect(verified?.emailVerifiedAt).toBeInstanceOf(Date);
-  });
-
-  test('finalizeInvitationSignup keeps the first password and writes one signup event', async () => {
-    const email = emailFor('finalize-once');
-    const user = await createUser({email, hashedPassword: null, emailVerifiedAt: null});
-
-    const first = await finalizeInvitationSignup({userId: user.id, hashedPassword: 'first-hash'});
-    const second = await finalizeInvitationSignup({userId: user.id, hashedPassword: 'second-hash'});
-    const events = await db()
-      .select()
-      .from(authOutbox)
-      .where(
-        and(
-          eq(authOutbox.eventType, AUTH_USER_SIGNED_UP),
-          sql`${authOutbox.payload}->>'email' = ${email}`,
-        ),
-      );
-
-    expect(first?.hashedPassword).toBe('first-hash');
-    expect(second).toBeUndefined();
-    expect((await findUserById({id: user.id}))?.hashedPassword).toBe('first-hash');
-    expect(events).toHaveLength(1);
-  });
-
-  test('deleteUser removes an unfinished invitation signup and leaves a finished one', async () => {
-    const open = await createUser({
-      email: emailFor('delete-open'),
-      hashedPassword: null,
-      emailVerifiedAt: null,
-    });
-    const finished = await createUser({
-      email: emailFor('delete-finished'),
-      hashedPassword: null,
-      emailVerifiedAt: null,
-    });
-    await finalizeInvitationSignup({userId: finished.id, hashedPassword: 'kept'});
-
-    await deleteUser({userId: open.id});
-    await deleteUser({userId: finished.id});
-
-    expect(await findUserById({id: open.id})).toBeUndefined();
-    expect((await findUserById({id: finished.id}))?.hashedPassword).toBe('kept');
   });
 
   test('opaque token helpers remain available', () => {

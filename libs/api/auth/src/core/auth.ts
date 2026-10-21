@@ -12,7 +12,6 @@ import {
 import {isInterModuleKnownError} from '@shipfox/inter-module';
 import {userAccessTokenKey} from '@shipfox/node-auth-root-key';
 import {durationToSeconds} from '@shipfox/node-jwt';
-import {logger} from '@shipfox/node-opentelemetry';
 import {generateOpaqueToken, hashOpaqueToken} from '@shipfox/node-tokens';
 import {config} from '#config.js';
 import {consumePasswordReset, createPasswordReset} from '#db/password-resets.js';
@@ -27,8 +26,6 @@ import {
 } from '#db/refresh-tokens.js';
 import {
   createUser as createDbUser,
-  deleteUser,
-  finalizeInvitationSignup,
   findUserByEmail,
   findUserById,
   markEmailVerified,
@@ -52,7 +49,6 @@ import {
   TokenExpiredError,
   TokenInvalidError,
   UserNotFoundError,
-  WorkspaceMembershipCapExceededError,
 } from './errors.js';
 import {signUserToken, type TokenMembership, verifyUserToken} from './jwt.js';
 import {hashPassword, verifyPassword} from './password.js';
@@ -223,16 +219,24 @@ function invitationErrorFromKnownError(
     return new TokenInvalidError('Invitation token is invalid');
   if (error.code === 'invitation-token-used') return new TokenAlreadyUsedError();
   if (error.code === 'invitation-token-expired') return new TokenExpiredError();
-  if (error.code === 'invitation-email-mismatch') return new InvitationEmailMismatchError();
-  if (error.code === 'workspace-membership-cap-exceeded') {
-    return new WorkspaceMembershipCapExceededError(error.details.cap);
-  }
-  return error as Error;
+  return new InvitationEmailMismatchError();
 }
 
-function isOpenInvitationSignup(user: User): boolean {
-  // Login refuses an unverified user, and password reset refuses a user with no password.
-  return user.status === 'active' && user.hashedPassword === null && user.emailVerifiedAt === null;
+function invitationErrorMessage(
+  code:
+    | 'invitation-token-invalid'
+    | 'invitation-token-used'
+    | 'invitation-token-expired'
+    | 'invitation-email-mismatch'
+    | 'workspace-membership-cap-exceeded',
+): string {
+  if (code === 'invitation-token-invalid') return 'Invitation token is invalid';
+  if (code === 'invitation-token-used') return 'Invitation has already been accepted';
+  if (code === 'invitation-token-expired') return 'Invitation has expired';
+  if (code === 'workspace-membership-cap-exceeded') {
+    return 'This workspace is full. Ask an administrator to free a seat before trying again.';
+  }
+  return 'Signup email does not match the invitation';
 }
 
 export interface SignupParams {
@@ -339,92 +343,82 @@ export interface SignupWithInvitationParams extends SignupParams {
 
 export interface SignupWithInvitationResult extends LoginResult {
   membership: {id: string; userId: string; workspaceId: string} | null;
+  acceptError?: {code: string; message: string};
 }
 
 export async function signupWithInvitation(
   params: SignupWithInvitationParams,
 ): Promise<SignupWithInvitationResult> {
-  const email = emailSchema.parse(params.email);
-  const existing = await findUserByEmail({email});
-  if (existing && !isOpenInvitationSignup(existing)) {
-    throw new EmailTakenError(email);
-  }
-
-  let user = existing;
-  let created = false;
-  if (!user) {
-    // Preflight before any user write so an invalid token never produces an orphan.
-    // Accept checks the token again, including a retry after this process died.
-    try {
-      await params.workspaces.preflightInvitationAcceptance({
-        token: params.invitationToken,
-        email,
-      });
-    } catch (error) {
-      throw invitationErrorFromKnownError(error, 'preflightInvitationAcceptance');
-    }
-
-    await assertSignupAllowed({
-      signupPolicy: params.signupPolicy,
-      email,
-      emailVerified: true,
-      source: 'invitation',
-    });
-
-    user = await createDbUser({
-      email,
-      hashedPassword: null,
-      name: params.name ?? null,
-      givenName: params.givenName ?? null,
-      familyName: params.familyName ?? null,
-      emailVerifiedAt: null,
-    });
-    created = true;
-  }
-
-  const hashedPassword = await hashPassword({password: params.password});
-  let accepted: Awaited<ReturnType<SignupWithInvitationParams['workspaces']['acceptInvitation']>>;
+  // Step 1: Pre-validate the invitation BEFORE any user write so an invalid
+  // token never produces an orphan user. Re-validation happens again inside
+  // acceptWorkspaceInvitation (race-safe) after the user is created.
   try {
-    accepted = await params.workspaces.acceptInvitation({
+    await params.workspaces.preflightInvitationAcceptance({
+      token: params.invitationToken,
+      email: params.email,
+    });
+  } catch (error) {
+    throw invitationErrorFromKnownError(error, 'preflightInvitationAcceptance');
+  }
+
+  // Step 2: Create the user as verified. The invitation email is the proof of
+  // ownership, and this avoids a second auth-table write just to mark verified.
+  const existing = await findUserByEmail({email: params.email});
+  if (existing) {
+    throw new EmailTakenError(params.email);
+  }
+  const hashedPassword = await hashPassword({password: params.password});
+  const user = await createDbUser({
+    email: params.email,
+    hashedPassword,
+    name: params.name ?? null,
+    givenName: params.givenName ?? null,
+    familyName: params.familyName ?? null,
+    emailVerifiedAt: new Date(),
+    signedUp: {viaInvitation: true},
+  });
+
+  // Step 3: Accept the invitation through the workspaces module boundary.
+  // This is intentionally not one database transaction with auth; treat it like
+  // calling another service. If it fails after user creation, return a verified
+  // signed-in user and an explicit retryable accept error.
+  let membership: SignupWithInvitationResult['membership'] = null;
+  let acceptError: SignupWithInvitationResult['acceptError'];
+  try {
+    const result = await params.workspaces.acceptInvitation({
       token: params.invitationToken,
       userId: user.id,
       email: user.email,
       name: user.name,
     });
+    membership = {
+      id: result.membership.id,
+      userId: result.membership.userId,
+      workspaceId: result.membership.workspaceId,
+    };
   } catch (error) {
-    if (created) {
-      const userId = user.id;
-      await deleteUser({userId}).catch((cleanupError: unknown) => {
-        logger().warn(
-          {err: cleanupError, userId},
-          'Failed to delete the user after invitation acceptance failed',
-        );
-      });
+    if (isInterModuleKnownError(workspacesInterModuleContract.methods.acceptInvitation, error)) {
+      acceptError = {code: error.code, message: invitationErrorMessage(error.code)};
+    } else {
+      acceptError = {
+        code: 'AcceptFailed',
+        message: 'Could not accept the invitation; please retry from the invite link.',
+      };
     }
-    throw invitationErrorFromKnownError(error, 'acceptInvitation');
   }
 
-  const verified = await finalizeInvitationSignup({userId: user.id, hashedPassword});
-  if (!verified) {
-    const current = await findUserById({id: user.id});
-    if (current?.hashedPassword && current.emailVerifiedAt) throw new EmailTakenError(email);
-    throw new Error('Invitation signup lost the user before setting a password');
-  }
-  const membership = {
-    id: accepted.membership.id,
-    userId: accepted.membership.userId,
-    workspaceId: accepted.membership.workspaceId,
-  };
-
-  // createSessionTokens reads memberships through the workspaces module API,
-  // so a successful accept is reflected in the JWT.
+  // Step 4: Issue session. createSessionTokens reads memberships through the
+  // workspaces module API, so a successful accept is reflected in the JWT.
   const {token, refreshToken, adminRole} = await createSessionTokens(
-    verified,
+    user,
     params.workspaces,
     false,
   );
 
-  return {token, refreshToken, user: verified, membership, adminRole};
+  if (acceptError) {
+    return {token, refreshToken, user, membership, acceptError, adminRole};
+  }
+  return {token, refreshToken, user, membership, adminRole};
 }
 
 export interface CreateUserParams extends SignupParams {

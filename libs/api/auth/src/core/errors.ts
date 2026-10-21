@@ -295,16 +295,6 @@ export class InvitationEmailMismatchError extends Error {
   }
 }
 
-export class WorkspaceMembershipCapExceededError extends Error {
-  readonly cap: number;
-
-  constructor(cap: number) {
-    super('Workspace membership cap exceeded');
-    this.name = 'WorkspaceMembershipCapExceededError';
-    this.cap = cap;
-  }
-}
-
 export class OpenInvitationExistsError extends Error {
   constructor(email: string) {
     super(`An open invitation already exists for: ${email}`);

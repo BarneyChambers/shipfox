@@ -10,7 +10,6 @@ import {
   TokenAlreadyUsedError,
   TokenExpiredError,
   TokenInvalidError,
-  WorkspaceMembershipCapExceededError,
 } from '#core/errors.js';
 import {SIGNUP_DENIAL_MESSAGE_MAX_LENGTH, type SignupPolicy} from '#core/ports.js';
 import {setRefreshTokenCookie} from '#presentation/auth/refresh-cookie.js';
@@ -56,13 +55,6 @@ function handleInvitationError(error: unknown): void {
       {
         status: 403,
       },
-    );
-  }
-  if (error instanceof WorkspaceMembershipCapExceededError) {
-    throw new ClientError(
-      'This workspace is full. Ask an administrator to free a seat before trying again.',
-      'workspace-membership-cap-exceeded',
-      {status: 409, details: {cap: error.cap}},
     );
   }
 }
@@ -121,7 +113,6 @@ export function createSignupRoute(
         familyName: family_name,
         invitationToken: invitation_token,
         workspaces,
-        signupPolicy,
       });
       setRefreshTokenCookie(reply, result.refreshToken);
       reply.code(201);
@@ -135,6 +126,7 @@ export function createSignupRoute(
               workspace_id: result.membership.workspaceId,
             }
           : null,
+        ...(result.acceptError ? {accept_error: result.acceptError} : {}),
       };
     },
   });
