@@ -120,7 +120,7 @@ async function renewJiraWebhook(params: {
         webhookExpiresAt: null,
         expectedWebhookIds: params.installation.webhookIds,
         expectedWebhookExpiresAt: params.installation.webhookExpiresAt,
-        webhookDeliveryBound: false,
+        expectedWebhookDeliveryBound: false,
       });
     }
     return 'skipped';

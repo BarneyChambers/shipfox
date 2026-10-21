@@ -15,7 +15,7 @@ export const jiraInstallations = pgTable(
     scopes: jsonb('scopes').$type<string[]>().notNull(),
     webhookIds: jsonb('webhook_ids').$type<number[]>().notNull().default([]),
     webhookExpiresAt: timestamp('webhook_expires_at', {withTimezone: true}),
-    webhookDeliveryBound: boolean('webhook_delivery_bound').notNull().default(true),
+    webhookDeliveryBound: boolean('webhook_delivery_bound').notNull().default(false),
     status: text('status').notNull().$type<JiraInstallation['status']>(),
     tokenExpiresAt: timestamp('token_expires_at', {withTimezone: true}),
     refreshTokenLastUsedAt: timestamp('refresh_token_last_used_at', {

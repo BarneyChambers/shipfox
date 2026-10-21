@@ -90,7 +90,7 @@ export interface UpdateJiraInstallationWebhookIfUnchangedParams
   extends Omit<UpdateJiraInstallationWebhookParams, 'webhookDeliveryBound'> {
   expectedWebhookIds: number[];
   expectedWebhookExpiresAt: Date | null;
-  webhookDeliveryBound?: false | undefined;
+  expectedWebhookDeliveryBound?: boolean | undefined;
 }
 
 type JiraDb = ReturnType<typeof db>;
@@ -291,9 +291,6 @@ export async function updateJiraInstallationWebhookIfUnchanged(
       webhookIds: params.webhookIds,
       webhookExpiresAt: params.webhookExpiresAt,
       updatedAt: new Date(),
-      ...(params.webhookDeliveryBound === undefined
-        ? {}
-        : {webhookDeliveryBound: params.webhookDeliveryBound}),
     })
     .where(
       and(
@@ -302,11 +299,10 @@ export async function updateJiraInstallationWebhookIfUnchanged(
         sql`${jiraInstallations.webhookIds} <@ ${expectedWebhookIds}::jsonb`,
         params.expectedWebhookExpiresAt === null
           ? isNull(jiraInstallations.webhookExpiresAt)
-          : // Date drops microseconds. The legacy migration stores now().
-            sql`date_trunc('milliseconds', ${jiraInstallations.webhookExpiresAt}) = date_trunc('milliseconds', ${params.expectedWebhookExpiresAt}::timestamptz)`,
-        params.webhookDeliveryBound === false
-          ? eq(jiraInstallations.webhookDeliveryBound, false)
-          : undefined,
+          : eq(jiraInstallations.webhookExpiresAt, params.expectedWebhookExpiresAt),
+        params.expectedWebhookDeliveryBound === undefined
+          ? undefined
+          : eq(jiraInstallations.webhookDeliveryBound, params.expectedWebhookDeliveryBound),
       ),
     )
     .returning();
