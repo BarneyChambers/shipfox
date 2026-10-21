@@ -350,12 +350,13 @@ describe('jira installations', () => {
 
   it('lists a legacy webhook that still posts without the delivery token', async () => {
     const legacy = createInstallationInput({
+      webhookIds: [123],
       webhookExpiresAt: new Date('2026-08-20T00:00:00.000Z'),
     });
     await upsertJiraInstallation(legacy);
     await updateJiraInstallationWebhook({
       connectionId: legacy.connectionId,
-      webhookIds: legacy.webhookIds,
+      webhookIds: [123],
       webhookExpiresAt: new Date('2026-08-20T00:00:00.000Z'),
       webhookDeliveryBound: false,
     });
@@ -372,22 +373,24 @@ describe('jira installations', () => {
 
   it('lists a dated legacy webhook before one whose expiry was cleared', async () => {
     const dated = createInstallationInput({
+      webhookIds: [123],
       webhookExpiresAt: new Date('2026-08-20T00:00:00.000Z'),
     });
     const cleared = createInstallationInput({
+      webhookIds: [456],
       webhookExpiresAt: new Date('2026-08-01T00:00:00.000Z'),
     });
     await upsertJiraInstallation(dated);
     await upsertJiraInstallation(cleared);
     await updateJiraInstallationWebhook({
       connectionId: dated.connectionId,
-      webhookIds: dated.webhookIds,
+      webhookIds: [123],
       webhookExpiresAt: dated.webhookExpiresAt ?? null,
       webhookDeliveryBound: false,
     });
     await updateJiraInstallationWebhook({
       connectionId: cleared.connectionId,
-      webhookIds: cleared.webhookIds,
+      webhookIds: [456],
       webhookExpiresAt: null,
       webhookDeliveryBound: false,
     });
